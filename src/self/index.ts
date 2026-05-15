@@ -20,7 +20,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { type ModelMessage } from 'ai';
 import 'dotenv/config';
 import { createInterface } from 'node:readline';
-import { agentLoop } from '../agent/loop';
+import { agentLoop } from '../agent/agent-loop';
 import { createMockModel } from '../mock-model';
 import { calculatorTool, weatherTool } from '../tools/utility-tools';
 

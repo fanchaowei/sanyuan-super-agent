@@ -2,7 +2,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { type ModelMessage } from 'ai'
 import 'dotenv/config'
 import { createInterface } from 'node:readline'
-import { agentLoop } from './agent/loop'
+import { agentLoop } from './agent/agent-loop'
 import { createMockModel } from './mock-model'
 import { calculatorTool, weatherTool } from './tools/utility-tools'
 
@@ -12,7 +12,7 @@ import { calculatorTool, weatherTool } from './tools/utility-tools'
 
 const tools = { get_weather: weatherTool, calculator: calculatorTool }
 
-const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。需要时主动使用工具获取信息，不要编造数据。`
+const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。需要时主动使用工具获取信息，不要编造数据。回答要简洁直接。`
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -52,5 +52,6 @@ function ask() {
   })
 }
 
-console.log('Super Agent v0.2 — Agent Loop (type "exit" to quit)\n');
+console.log('Super Agent v0.3 — Fuses (type "exit" to quit)\n');
+console.log('试试输入："测试死循环"、"测试重试"、"测试预算" 看三层防护效果\n');
 ask()

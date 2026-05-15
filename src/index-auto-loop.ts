@@ -1,8 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai'
-import { type ModelMessage } from 'ai'
+import { stepCountIs, streamText, type ModelMessage } from 'ai'
 import 'dotenv/config'
 import { createInterface } from 'node:readline'
-import { agentLoop } from './agent/loop'
 import { createMockModel } from './mock-model'
 import { calculatorTool, weatherTool } from './tools/utility-tools'
 
@@ -46,7 +45,35 @@ function ask() {
     // 将用户本次的输入加入到 message
     messages.push({ role: 'user', content: trimmed })
 
-    await agentLoop(model, tools, messages, SYSTEM)
+    const result = streamText({
+      model,
+      // 定义它的行为风格
+      system: SYSTEM,
+      messages,
+      tools,
+      stopWhen: stepCountIs(5), // 当 LLM 需要调用工具时自动调用并循环，次数为 5 次
+    })
+
+    process.stdout.write('Assistant: ')
+    let fullResponse = ''
+
+    for await (const part of result.fullStream) {
+      switch (part.type) {
+        case 'text-delta':
+          process.stdout.write(part.text);
+          fullResponse += part.text;
+          break;
+        case 'tool-call':
+          console.log(`\n  [调用工具: ${part.toolName}(${JSON.stringify(part.input)})]`);
+          break;
+        case 'tool-result':
+          console.log(`  [工具返回: ${JSON.stringify(part.output)}]`);
+          break;
+      }
+    }
+
+    console.log() // 换行
+    messages.push({ role: 'assistant', content: fullResponse })
 
     ask()
   })

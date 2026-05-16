@@ -2,7 +2,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { type ModelMessage } from 'ai'
 import 'dotenv/config'
 import { createInterface } from 'node:readline'
-import { agentLoop } from './agent/agent-loop'
+import { agentLoop, type BudgetState } from './agent/agent-loop'
 import { createMockModel } from './mock-model'
 import { calculatorTool, weatherTool } from './tools/utility-tools'
 
@@ -33,6 +33,9 @@ const rl = createInterface({
 // 对话历史，包含 role 和 content
 const messages: ModelMessage[] = []
 
+// 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
+const budget: BudgetState = { used: 0, limit: 15000 };
+
 function ask() {
   // 提问并等待用户输入
   rl.question('\nYou: ', async (input) => {
@@ -46,7 +49,7 @@ function ask() {
     // 将用户本次的输入加入到 message
     messages.push({ role: 'user', content: trimmed })
 
-    await agentLoop(model, tools, messages, SYSTEM)
+    await agentLoop(model, tools, messages, SYSTEM, budget)
 
     ask()
   })

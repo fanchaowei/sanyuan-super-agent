@@ -46,7 +46,7 @@ const rl = createInterface({
 const messages: ModelMessage[] = []
 
 // 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
-const budget: BudgetState = { used: 0, limit: 15000 };
+const budget: BudgetState = { used: 0, limit: 50000 };
 
 function ask() {
   // 提问并等待用户输入
@@ -68,5 +68,5 @@ function ask() {
 }
 
 console.log('Super Agent v0.4 — Fuses (type "exit" to quit)\n');
-console.log('试试输入："测试死循环"、"测试重试"、"测试预算"、"测试截断"、"测试并发"\n');
+console.log('试试输入："找出项目里所有 TODO"、"去 https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling 看下文档总结"、"做一个待办清单的网页应用"\n');
 ask()

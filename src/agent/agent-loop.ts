@@ -1,4 +1,5 @@
 import { streamText, type ModelMessage } from 'ai';
+import { ToolRegistry } from '../tools/tool-registry.js';
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js';
 import { calculateDelay, isRetryable, sleep } from './retry.js';
 
@@ -12,7 +13,7 @@ export interface BudgetState {
 
 export async function agentLoop(
   model: any,
-  tools: any,
+  registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
   budget: BudgetState,
@@ -34,7 +35,7 @@ export async function agentLoop(
     for (let attempt = 1; ; attempt++) {
       try {
         const result = streamText({
-          model, system, tools, messages, maxRetries: 0,
+          model, system, tools: registry.toAISDKFormat(), messages, maxRetries: 0,
           providerOptions: { openai: { parallelToolCalls: true } }, onError: () => { }
         });
 

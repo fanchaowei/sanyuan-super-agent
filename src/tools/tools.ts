@@ -1,5 +1,23 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+/**
+ * 工具定义字段说明：
+ * - name: 工具的唯一名称，模型会通过这个名称决定调用哪个工具。
+ * - description: 工具能力描述，主要给模型判断“什么时候该用这个工具”。
+ * - parameters: 工具入参的 JSON Schema，声明参数字段、类型、必填项和额外字段规则。
+ *   - type: 参数整体的数据类型，这里通常是 object，表示工具接收一个参数对象。
+ *   - properties: 参数对象里允许出现的字段；每个字段可以声明 type、description 等信息。
+ *   - required: 必填字段列表；模型调用工具时必须提供这些字段。
+ *   - additionalProperties: 是否允许传入未在 properties 中声明的额外字段。
+ * - execute: 工具真正执行的函数，接收 parameters 定义的参数并返回执行结果。
+ *
+ * 常用辅助字段：
+ * - isConcurrencySafe: 是否允许并发执行；写文件等有副作用的工具通常设为 false。
+ * - isReadOnly: 是否只读；用于区分查询类工具和会修改外部状态的工具。
+ * - maxResultChars: 限制工具返回结果的最大字符数，避免一次输出过长。
+ */
+import fg from 'fast-glob';
+import { execSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import type { ToolDefinition } from './tool-registry.js';
 
 export const weatherTool: ToolDefinition = {
@@ -110,6 +128,190 @@ export const listDirectoryTool: ToolDefinition = {
   },
 };
 
+export const editFileTool: ToolDefinition = {
+  name: 'edit_file',
+  description: '精确替换文件中的指定内容。用 old_string 定位要替换的文本，用 new_string 替换它。不是全量覆写——只改你指定的部分',
+  parameters: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '文件路径' },
+      old_string: { type: 'string', description: '要被替换的原始文本（必须精确匹配）' },
+      new_string: { type: 'string', description: '替换后的新文本' },
+    },
+    required: ['path', 'old_string', 'new_string'],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: false,
+  isReadOnly: false,
+  execute: async ({ path, old_string, new_string }) => {
+    const resolved = resolve(path);
+    if (!existsSync(resolved)) return `文件不存在: ${path}`;
+
+    const content = readFileSync(resolved, 'utf-8');
+    const count = content.split(old_string).length - 1;
+
+    if (count === 0) {
+      return `未找到匹配内容。请检查 old_string 是否与文件中的文本完全一致（包括空格和换行）`;
+    }
+    if (count > 1) {
+      return `找到 ${count} 处匹配，请提供更多上下文让 old_string 唯一`;
+    }
+
+    const updated = content.replace(old_string, new_string);
+    writeFileSync(resolved, updated, 'utf-8');
+    return `已替换 ${path} 中的内容（${old_string.length} → ${new_string.length} 字符）`;
+  },
+};
+
+export const globTool: ToolDefinition = {
+  name: 'glob',
+  description: '按模式搜索文件。支持 * 和 ** 通配符，如 "src/**/*.ts" 匹配 src 下所有 TypeScript 文件',
+  parameters: {
+    type: 'object',
+    properties: {
+      pattern: { type: 'string', description: '搜索模式，如 "**/*.ts"、"src/*.json"' },
+      path: { type: 'string', description: '搜索起始目录，默认当前目录' },
+    },
+    required: ['pattern'],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: true,
+  isReadOnly: true,
+  execute: async ({ pattern, path = '.' }) => {
+    // ... 递归遍历目录，匹配模式 ...
+    // 自动跳过 node_modules 和 .git
+    // 结果上限 100 条，防止大项目撑爆
+
+    const results = await fg(pattern, {
+      cwd: resolve(path),
+      ignore: ['node_modules/**', '.git/**'],
+      dot: false,
+      onlyFiles: true,
+      followSymbolicLinks: false,
+    });
+    if (results.length === 0) return `没有找到匹配 "${pattern}" 的文件`;
+    return results.sort().join('\n');
+  },
+};
+
+// 在传入的文件或目录下搜索文本内容，找出哪些行匹配 pattern，并返回匹配行的位置和内容。
+export const grepTool: ToolDefinition = {
+  name: 'grep',
+  description: '在文件中搜索匹配指定模式的内容。返回匹配的行号和内容',
+  parameters: {
+    type: 'object',
+    properties: {
+      pattern: { type: 'string', description: '搜索模式（正则表达式）' },
+      path: { type: 'string', description: '搜索路径（文件或目录），默认当前目录' },
+    },
+    required: ['pattern'],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: true,
+  isReadOnly: true,
+  maxResultChars: 3000,
+  execute: async ({ pattern, path = '.' }) => {
+    // ... 递归搜索文件，正则匹配每一行 ...
+    // 跳过 node_modules、.git、二进制文件
+    // 返回格式：文件名:行号: 匹配内容
+    // 上限 50 条匹配
+
+    // 相对路径转换为绝对路径
+    const baseDir = resolve(path);
+    // 将搜索关键字转换为正则表达式
+    const regex = new RegExp(pattern, 'i');
+    // 储存搜索结果
+    const matches: string[] = [];
+    const SKIP = new Set(['node_modules', '.git', 'dist']);
+    const BIN_EXT = new Set(['.png', '.jpg', '.gif', '.woff', '.woff2', '.ico', '.lock']);
+
+    function searchFile(filePath: string) {
+      if (matches.length >= 50) return;
+      const ext = filePath.slice(filePath.lastIndexOf('.'));
+      if (BIN_EXT.has(ext)) return;
+
+      let content: string;
+      try { content = readFileSync(filePath, 'utf-8'); } catch { return; }
+
+      const lines = content.split('\n');
+      // 把绝对文件路径转换成相对于搜索根目录的路径，便于结果阅读。
+      const rel = relative(baseDir, filePath);
+      // 逐行检查文件内容，命中时记录“相对路径:行号:行内容”。
+      for (let i = 0; i < lines.length; i++) {
+        if (regex.test(lines[i])) {
+          matches.push(`${rel}:${i + 1}: ${lines[i].trimEnd()}`);
+          // 最多保留 50 条结果，避免大项目里输出过多内容。
+          if (matches.length >= 50) return;
+        }
+      }
+    }
+
+    function walk(dir: string) {
+      if (matches.length >= 50) return;
+      let entries: string[];
+      try { entries = readdirSync(dir); } catch { return; }
+
+      for (const name of entries) {
+        if (SKIP.has(name)) continue;
+        const full = join(dir, name);
+        try {
+          const stat = statSync(full);
+          if (stat.isDirectory()) walk(full);
+          else searchFile(full);
+        } catch { /* skip */ }
+      }
+    }
+
+    // 获取文件或目录的详细信息
+    const stat = statSync(baseDir);
+    if (stat.isFile()) {
+      searchFile(baseDir);
+    } else {
+      walk(baseDir);
+    }
+
+    if (matches.length === 0) return `没有找到匹配 "${pattern}" 的内容`;
+    const suffix = matches.length >= 50 ? '\n... (结果已截断，共 50+ 条匹配)' : '';
+    return matches.join('\n') + suffix;
+  },
+};
+
+export const bashTool: ToolDefinition = {
+  name: 'bash',
+  description: '执行 shell 命令并返回输出。适合运行脚本、检查环境、执行构建等操作',
+  parameters: {
+    type: 'object',
+    properties: {
+      command: { type: 'string', description: '要执行的 shell 命令' },
+    },
+    required: ['command'],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: false,
+  isReadOnly: false,
+  maxResultChars: 3000,
+  execute: async ({ command }) => {
+    // 先检测环境是否支持 child_process
+    try {
+      execSync('echo test', { stdio: 'ignore' });
+    } catch {
+      return `[bash 不可用] 当前环境不支持 shell 命令。本地终端运行可使用。`;
+    }
+
+    try {
+      const output = execSync(command, {
+        encoding: 'utf-8',
+        timeout: 10000,  // 10 秒超时
+        maxBuffer: 1024 * 1024,
+      });
+      return output || '(命令执行成功，无输出)';
+    } catch (err: any) {
+      return `命令执行失败 (exit ${err.status || 1}):\n${err.stderr || err.message}`;
+    }
+  },
+};
+
+
 export const allTools: ToolDefinition[] = [
-  weatherTool, calculatorTool, readFileTool, writeFileTool, listDirectoryTool,
+  weatherTool, calculatorTool, readFileTool, writeFileTool, listDirectoryTool, editFileTool, globTool, grepTool, bashTool
 ];

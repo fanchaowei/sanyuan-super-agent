@@ -15,6 +15,7 @@
  *    如此重复，直到本轮工具调用全部执行完成。
  */
 import { jsonSchema } from 'ai';
+import type { MCPClient, MockMCPClient } from '../mcp/mcp-client';
 
 export interface ToolDefinition {
   name: string;
@@ -30,6 +31,7 @@ const DEFAULT_MAX_RESULT_CHARS = 3000;
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();
+  private mcpClients: Array<MCPClient | MockMCPClient> = [];
 
   // 三个状态变量构成一把读写锁
   private exclusiveLock = false;          // 当前是否有独占锁持有者，是否有独占工具正在执行
@@ -48,6 +50,51 @@ export class ToolRegistry {
 
   getAll(): ToolDefinition[] {
     return Array.from(this.tools.values());
+  }
+
+  async registerMCPServer(
+    serverName: string,
+    client: MCPClient | MockMCPClient,
+  ): Promise<string[]> {
+    await client.connect();
+    this.mcpClients.push(client);
+
+    // 获取所有工具
+    const tools = await client.listTools();
+    const registered: string[] = [];
+
+    // 逐个注册所有工具
+    for (const tool of tools) {
+      const prefixedName = `mcp__${serverName}__${tool.name}`;
+
+      if (this.tools.has(prefixedName)) continue;
+
+      const toolClient = client;
+      const originalName = tool.name;
+
+      this.register({
+        name: prefixedName,
+        description: `[MCP:${serverName}] ${tool.description}`,
+        parameters: tool.inputSchema as Record<string, unknown>,
+        isConcurrencySafe: true,
+        isReadOnly: true,
+        maxResultChars: 3000,
+        execute: async (input: any) => {
+          return toolClient.callTool(originalName, input);
+        },
+      });
+
+      registered.push(prefixedName);
+    }
+
+    return registered;
+  }
+
+  async closeAllMCP(): Promise<void> {
+    for (const client of this.mcpClients) {
+      await client.close();
+    }
+    this.mcpClients = [];
   }
 
   // 获取共享锁：只要没人独占就能拿，多个只读工具可以同时持有

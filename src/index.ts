@@ -3,6 +3,8 @@ import { type ModelMessage } from 'ai'
 import 'dotenv/config'
 import { createInterface } from 'node:readline'
 import { agentLoop, type BudgetState } from './agent/agent-loop'
+// import { MCPClient, MockMCPClient } from './mcp/mcp-client'
+import { MCPClient, MockMCPClient } from './mcp/mcp-client-sdk'
 import { createMockModel } from './mock-model'
 import { ToolRegistry } from './tools/tool-registry'
 import { allTools } from './tools/tools'
@@ -25,6 +27,50 @@ const model: any = process.env.DASHSCOPE_API_KEY
 // 注册工具
 const registry = new ToolRegistry()
 registry.register(...allTools)
+
+async function connectMCP() {
+  const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+
+  let canSpawn = true;
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync('echo test', { stdio: 'ignore' });
+  } catch {
+    canSpawn = false;
+  }
+
+  if (githubToken && canSpawn) {
+    console.log('\n连接 GitHub MCP Server...');
+    try {
+      const command = process.platform === 'win32' ? 'cmd.exe' : 'npx';
+      const args = process.platform === 'win32'
+        ? ['/d', '/s', '/c', 'npx', '-y', '@modelcontextprotocol/server-github']
+        : ['-y', '@modelcontextprotocol/server-github'];
+
+      const client = new MCPClient(
+        command,
+        args,
+        { GITHUB_PERSONAL_ACCESS_TOKEN: githubToken },
+      )
+      const tools = await registry.registerMCPServer('github', client);
+      console.log(`  已注册 ${tools.length} 个 MCP 工具`);
+      return;
+    } catch (err) {
+      console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`);
+      console.log('  降级为 Mock MCP...');
+    }
+  }
+
+  if (!githubToken) {
+    console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN，使用 Mock MCP');
+  }
+
+  const mockClient = new MockMCPClient();
+  const tools = await registry.registerMCPServer('github', mockClient);
+  console.log(`  已注册 ${tools.length} 个 Mock MCP 工具`);
+}
+
+await connectMCP()
 
 console.log(`已注册 ${registry.getAll().length} 个工具：`);
 for (const tool of registry.getAll()) {
@@ -68,5 +114,5 @@ function ask() {
 }
 
 console.log('Super Agent v0.4 — Fuses (type "exit" to quit)\n');
-console.log('试试输入："找出项目里所有 TODO"、"去 https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling 看下文档总结"、"做一个待办清单的网页应用"\n');
+console.log('试试输入："查看 vercel/ai 的 issues"\n');
 ask()

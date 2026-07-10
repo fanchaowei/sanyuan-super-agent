@@ -25,6 +25,8 @@ export interface ToolDefinition {
   isReadOnly?: boolean;
   maxResultChars?: number;
   execute: (input: any) => Promise<unknown>;
+  shouldDefer?: boolean;    // 是否延迟加载
+  searchHint?: string;      // 搜索提示词，帮助 ToolSearch 匹配
 }
 
 const DEFAULT_MAX_RESULT_CHARS = 3000;
@@ -37,6 +39,9 @@ export class ToolRegistry {
   private exclusiveLock = false;          // 当前是否有独占锁持有者，是否有独占工具正在执行
   private concurrentCount = 0;            // 当前共享锁持有数
   private waitQueue: Array<() => void> = [];  // 等待锁释放的异步任务队列
+
+  // 已发现的延迟工具的列表
+  private discoveredTools = new Set<string>();
 
   register(...tools: ToolDefinition[]): void {
     for (const tool of tools) {
@@ -79,6 +84,8 @@ export class ToolRegistry {
         isConcurrencySafe: true,
         isReadOnly: true,
         maxResultChars: 3000,
+        shouldDefer: true,
+        searchHint: `${serverName} ${tool.name} ${tool.description}`,
         execute: async (input: any) => {
           return toolClient.callTool(originalName, input);
         },
@@ -133,23 +140,27 @@ export class ToolRegistry {
 
   toAISDKFormat(): Record<string, any> {
     const result: Record<string, any> = {};
-    for (const [name, tool] of this.tools) {
+    // 获取活跃的工具
+    const activeTools = this.getActiveTools();
+
+    // 只返回给大模型活跃的工具
+    for (const tool of activeTools) {
       const maxChars = tool.maxResultChars;
       const executeFn = tool.execute;
       const isSafe = tool.isConcurrencySafe === true;
       const registry = this;
 
-      result[name] = {
+      result[tool.name] = {
         description: tool.description,
         inputSchema: jsonSchema(tool.parameters as any),
         execute: async (input: any) => {
           // 在真正执行前先按 isConcurrencySafe 获取锁
           if (isSafe) {
             await registry.acquireConcurrent();
-            console.log(`  [并发] ${name} 获取共享锁`);
+            console.log(`  [并发] ${tool.name} 获取共享锁`);
           } else {
             await registry.acquireExclusive();
-            console.log(`  [串行] ${name} 获取独占锁，等待其他工具完成`);
+            console.log(`  [串行] ${tool.name} 获取独占锁，等待其他工具完成`);
           }
           try {
             const raw = await executeFn(input);
@@ -167,6 +178,76 @@ export class ToolRegistry {
       };
     }
     return result;
+  }
+
+  // 生成延迟工具的名字列表，附到 System prompt 里
+  getDeferredToolSummary(): string {
+    const deferred = this.getAll().filter(tool => {
+      return tool.shouldDefer && !this.discoveredTools.has(tool.name);
+    });
+
+    if (deferred.length === 0) return '';
+
+    const lines = deferred.map(t => {
+      const hint = t.searchHint ? ` — ${t.searchHint}` : '';
+      return `  - ${t.name}${hint}`;
+    });
+
+    return `\n以下工具可用，但需要先通过 tool_search 搜索获取完整定义：\n${lines.join('\n')}`;
+  }
+
+  // 过滤，控制哪些工具进入 prompt。延迟工具默认不输出，除非已经被 tool_search 发现过
+  getActiveTools(): ToolDefinition[] {
+    return this.getAll().filter(tool => {
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  // 搜索延迟工具
+  searchTools(query: string): ToolDefinition[] {
+    const q = query.trim();
+    const results: ToolDefinition[] = [];
+
+    // 支持逗号分隔的多个工具名，如 "mcp__github__list_issues,mcp__github__search_repositories"
+    const names = q.includes(',')
+      ? q.split(',').map(n => n.trim()).filter(Boolean)
+      : [q];
+
+    for (const name of names) {
+      const tool = this.tools.get(name);
+      if (tool && tool.name !== 'tool_search') {
+        results.push(tool);
+        this.discoveredTools.add(tool.name);
+      }
+    }
+
+    return results;
+  }
+
+  // 估算方法，用于估算节省了多少 token
+  countTokenEstimate(): { active: number; deferred: number; total: number } {
+    let active = 0;
+    let deferred = 0;
+
+    for (const tool of this.tools.values()) {
+      const schemaSize = JSON.stringify({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }).length;
+      const tokens = Math.ceil(schemaSize / 4);
+
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        deferred += tokens;
+      } else {
+        active += tokens;
+      }
+    }
+
+    return { active, deferred, total: active + deferred };
   }
 }
 

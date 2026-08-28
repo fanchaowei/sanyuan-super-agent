@@ -4,8 +4,15 @@ import 'dotenv/config'
 import { createInterface } from 'node:readline'
 import { agentLoop, type BudgetState } from './agent/agent-loop'
 // import { MCPClient, MockMCPClient } from './mcp/mcp-client'
+import {
+  PromptBuilder, coreRules,
+  deferredTools, sessionContext,
+  toolGuide,
+  type PromptContext,
+} from './context/prompt-builder.js'
 import { MCPClient, MockMCPClient } from './mcp/mcp-client-sdk'
 import { createMockModel } from './mock-model'
+import { SessionStore } from './session/store'
 import { ToolRegistry, type ToolDefinition } from './tools/tool-registry'
 import { allTools } from './tools/tools'
 
@@ -137,14 +144,39 @@ async function main() {
   console.log(`  延迟工具: ${allCount - activeTools.length} 个`);
   console.log(`  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟)`);
 
+  // 对话历史，包含 role 和 content
+  let messages: ModelMessage[] = []
 
-  const deferredSummary = registry.getDeferredToolSummary();
+  // Session 持久化
+  const isContinue = process.argv.includes('--continue');
+  const sessionId = 'default';
+  const store = new SessionStore(sessionId);
 
-  const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
-你有内置工具和 MCP 工具可用。
-如果你需要的工具不在当前列表中，使用 tool_search 工具搜索可用工具。
-回答要简洁直接。${deferredSummary}`
+  if (isContinue && store.exists()) {
+    messages = store.load();
+    console.log(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条历史消息`);
+  } else {
+    console.log(`\n[Session] 新会话 "${sessionId}"`);
+  }
 
+  // Prompt Pipe 组装 system prompt
+  const builder = new PromptBuilder()
+    .pipe('coreRules', coreRules())
+    .pipe('toolGuide', toolGuide())
+    .pipe('deferredTools', deferredTools())
+    .pipe('sessionContext', sessionContext());
+
+  const promptCtx: PromptContext = {
+    toolCount: registry.getActiveTools().length,
+    deferredToolSummary: registry.getDeferredToolSummary(),
+    sessionMessageCount: messages.length,
+    sessionId,
+  };
+
+  const SYSTEM = builder.build(promptCtx);
+
+  // Debug: 显示 Prompt Pipe 各模块状态
+  builder.debug(promptCtx)
 
   // node readline 模块
   // 创建一个命令行交互对象，让程序可以从中断读取用户输入，并把提示活输出显示到终端
@@ -153,8 +185,6 @@ async function main() {
     output: process.stdout, // 标准输出，终端显示
   })
 
-  // 对话历史，包含 role 和 content
-  const messages: ModelMessage[] = []
 
   // 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
   const budget: BudgetState = { used: 0, limit: 50000 };
@@ -169,10 +199,19 @@ async function main() {
         return
       }
 
+      const userMsg: ModelMessage = { role: 'user', content: trimmed };
+
       // 将用户本次的输入加入到 message
-      messages.push({ role: 'user', content: trimmed })
+      messages.push(userMsg);
+      store.append(userMsg);
+
+      const beforeLen = messages.length;
 
       await agentLoop(model, registry, messages, SYSTEM, budget)
+
+      // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
+      const newMessages = messages.slice(beforeLen);
+      store.appendAll(newMessages);
 
       ask()
     })

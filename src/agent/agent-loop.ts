@@ -3,7 +3,9 @@ import { ToolRegistry } from '../tools/tool-registry.js';
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js';
 import { calculateDelay, isRetryable, sleep } from './retry.js';
 
+// 单次任务最多允许模型进行 15 轮“思考/调用工具”，防止异常情况下无限循环。
 const MAX_STEPS = 15;
+// 网络或上游服务暂时失败时，最多额外重试 3 次。
 const MAX_RETRIES = 3;
 
 export interface BudgetState {
@@ -19,8 +21,10 @@ export async function agentLoop(
   budget: BudgetState,
 ) {
   let step = 0;
+  // 循环检测历史属于本次 agent 运行的状态；每次新任务开始前必须清空。
   resetHistory();
 
+  // 每一轮都会把上一轮的响应追加到 messages，再交给模型决定下一步动作。
   while (step < MAX_STEPS) {
     step++;
     console.log(`\n--- Step ${step} ---`);
@@ -34,14 +38,19 @@ export async function agentLoop(
 
     for (let attempt = 1; ; attempt++) {
       try {
+        // 发起一次流式模型请求：同时提供系统提示、历史消息和可用工具。
+        // 关闭 SDK 内置重试，统一由下面的 catch 按项目策略处理重试和退避。
         const result = streamText({
           model, system, tools: registry.toAISDKFormat(), messages, maxRetries: 0,
+          // 允许模型在同一响应中并行提出多个工具调用（由 SDK/provider 执行）。
           providerOptions: { openai: { parallelToolCalls: true } }, onError: () => { }
         });
 
+        // fullStream 按事件顺序产出文本、工具调用和工具结果，适合边生成边处理。
         for await (const part of result.fullStream) {
           switch (part.type) {
             case 'text-delta':
+              // 文本增量立即输出给用户，同时拼起来用于判断本轮是否有最终答复。
               process.stdout.write(part.text);
               fullText += part.text;
               break;
@@ -76,12 +85,14 @@ export async function agentLoop(
             case 'tool-result':
               console.log(`  [结果: ${JSON.stringify(part.output)}]`);
               if (lastToolCall) {
+                // 将工具结果和对应调用配对记录，供后续循环检测判断是否反复失败。
                 recordResult(lastToolCall.name, lastToolCall.input, part.output);
               }
               break;
           }
         }
 
+        // response 提供可追加到下一轮上下文的标准消息；usage 用于扣减 token 预算。
         stepResponse = await result.response;
         stepUsage = await result.usage;
         break;
@@ -104,6 +115,7 @@ export async function agentLoop(
       break;
     }
 
+    // 保存本轮 assistant/tool 消息，下一轮模型才能看到刚才的输出和工具结果。
     messages.push(...stepResponse.messages);
 
     // Token 预算追踪：budget 由调用方持有，跨轮累计。
@@ -121,10 +133,12 @@ export async function agentLoop(
     }
 
     if (!hasToolCall) {
+      // 模型没有请求工具，说明它已经给出最终文本答案，本次 agent loop 可以结束。
       if (fullText) console.log();
       break;
     }
 
+    // 仍有工具调用，继续下一轮，让模型根据工具结果决定后续动作。
     console.log('  \u2192 继续下一步...');
   }
 

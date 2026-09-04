@@ -2,9 +2,19 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { type ModelMessage } from 'ai'
 import 'dotenv/config'
 import { createInterface } from 'node:readline'
-import { agentLoop, type BudgetState } from './agent/agent-loop'
+import { agentLoop } from './agent/agent-loop'
 // import { MCPClient, MockMCPClient } from './mcp/mcp-client'
-import { estimateTokens, microcompact, summarize } from './context/compressor'
+import {
+  estimateTokens,
+  microcompact,
+  remapTimestampsAfterCompaction,
+  summarize,
+} from './context/compressor'
+import {
+  TokenTracker,
+  applyDefense,
+  estimateMessageTokens
+} from './context/defense.js'
 import {
   PromptBuilder, coreRules,
   deferredTools, sessionContext,
@@ -13,6 +23,7 @@ import {
 } from './context/prompt-builder.js'
 import { textToolResultOutput } from './context/tool-result-output'
 import { MCPClient, MockMCPClient } from './mcp/mcp-client-sdk'
+import { injectFakeHistory_lesson12, simulatedTools } from './mock'
 import { createMockModel } from './mock-model'
 import { SessionStore } from './session/store'
 import { ToolRegistry, type ToolDefinition } from './tools/tool-registry'
@@ -107,35 +118,12 @@ async function connectMCP() {
 
 // 模拟额外的 MCP 工具（演示工具膨胀问题）
 function registerSimulatedTools() {
-  const simulatedTools: ToolDefinition[] = [
-    // Notion MCP 模拟
-    { name: 'mcp__notion__search_pages', description: '[MCP:notion] 搜索 Notion 页面', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }, shouldDefer: true, searchHint: 'notion search pages documents', isConcurrencySafe: true, isReadOnly: true, execute: async ({ query }: any) => JSON.stringify([{ title: `Mock: ${query}`, id: 'page-001' }]) },
-    { name: 'mcp__notion__create_page', description: '[MCP:notion] 创建 Notion 页面', parameters: { type: 'object', properties: { title: { type: 'string' }, content: { type: 'string' } }, required: ['title'] }, shouldDefer: true, searchHint: 'notion create page document write', isConcurrencySafe: false, isReadOnly: false, execute: async ({ title }: any) => `已创建页面: ${title}` },
-    { name: 'mcp__notion__list_databases', description: '[MCP:notion] 列出 Notion 数据库', parameters: { type: 'object', properties: {}, required: [] }, shouldDefer: true, searchHint: 'notion list databases tables', isConcurrencySafe: true, isReadOnly: true, execute: async () => JSON.stringify([{ title: '项目追踪', id: 'db-001' }, { title: '知识库', id: 'db-002' }]) },
-
-    // Playwright MCP 模拟
-    { name: 'mcp__browser__navigate', description: '[MCP:browser] 导航到指定 URL', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }, shouldDefer: true, searchHint: 'browser navigate open url webpage', isConcurrencySafe: false, isReadOnly: false, execute: async ({ url }: any) => `已导航到 ${url}` },
-    { name: 'mcp__browser__screenshot', description: '[MCP:browser] 对当前页面截图', parameters: { type: 'object', properties: {} }, shouldDefer: true, searchHint: 'browser screenshot capture page', isConcurrencySafe: true, isReadOnly: true, execute: async () => '[screenshot data]' },
-    { name: 'mcp__browser__click', description: '[MCP:browser] 点击页面元素', parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] }, shouldDefer: true, searchHint: 'browser click element button', isConcurrencySafe: false, isReadOnly: false, execute: async ({ selector }: any) => `已点击 ${selector}` },
-    { name: 'mcp__browser__fill', description: '[MCP:browser] 在输入框中填写内容', parameters: { type: 'object', properties: { selector: { type: 'string' }, value: { type: 'string' } }, required: ['selector', 'value'] }, shouldDefer: true, searchHint: 'browser fill input form text', isConcurrencySafe: false, isReadOnly: false, execute: async ({ selector, value }: any) => `已在 ${selector} 填写 ${value}` },
-    { name: 'mcp__browser__get_text', description: '[MCP:browser] 获取页面文本内容', parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] }, shouldDefer: true, searchHint: 'browser get text content extract', isConcurrencySafe: true, isReadOnly: true, execute: async ({ selector }: any) => `Mock text content of ${selector}` },
-
-    // Supabase MCP 模拟
-    { name: 'mcp__supabase__query', description: '[MCP:supabase] 执行 SQL 查询', parameters: { type: 'object', properties: { sql: { type: 'string' } }, required: ['sql'] }, shouldDefer: true, searchHint: 'database sql query select', isConcurrencySafe: true, isReadOnly: true, execute: async ({ sql }: any) => JSON.stringify([{ id: 1, name: 'mock_row', sql }]) },
-    { name: 'mcp__supabase__list_tables', description: '[MCP:supabase] 列出数据库所有表', parameters: { type: 'object', properties: {} }, shouldDefer: true, searchHint: 'database list tables schema', isConcurrencySafe: true, isReadOnly: true, execute: async () => JSON.stringify(['users', 'orders', 'products']) },
-    { name: 'mcp__supabase__describe_table', description: '[MCP:supabase] 查看表结构', parameters: { type: 'object', properties: { table: { type: 'string' } }, required: ['table'] }, shouldDefer: true, searchHint: 'database describe table columns schema', isConcurrencySafe: true, isReadOnly: true, execute: async ({ table }: any) => JSON.stringify({ table, columns: [{ name: 'id', type: 'integer' }, { name: 'name', type: 'text' }] }) },
-  ];
-
   registry.register(...simulatedTools);
   return simulatedTools.length;
 }
 
-async function main() {
-  await connectMCP()
-
-  const simCount = registerSimulatedTools();
-  console.log(`  已注册 ${simCount} 个模拟 MCP 工具（Notion/Browser/Supabase）`);
-
+// 注册工具
+function registerTools() {
   const allCount = registry.getAll().length;
   const activeTools = registry.getActiveTools();
   const estimate = registry.countTokenEstimate();
@@ -145,11 +133,10 @@ async function main() {
   console.log(`  活跃工具: ${activeTools.length} 个（非延迟）`);
   console.log(`  延迟工具: ${allCount - activeTools.length} 个`);
   console.log(`  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟)`);
+}
 
-  // 对话历史，包含 role 和 content
-  let messages: ModelMessage[] = []
-
-  // Session 持久化
+// 初始化 Session，并根据启动参数恢复历史消息
+function initializeSession(messages: ModelMessage[], timestamps: Map<number, number>) {
   const isContinue = process.argv.includes('--continue');
   const sessionId = 'default';
   const store = new SessionStore(sessionId);
@@ -159,13 +146,16 @@ async function main() {
     console.log(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条历史消息`);
   } else {
     // 注入模拟历史，演示压缩效果
-    injectFakeHistory(messages);
+    injectFakeHistory_lesson12(messages, timestamps);
     console.log(`\n[Session] 新会话 "${sessionId}"`);
+    console.log(`\n[Session] 新会话（已注入 ${messages.length} 条模拟历史，时间跨度 12 分钟）`);
   }
 
-  //#region 压缩演示
-  let summary = '';
+  return { messages, sessionId, store };
+}
 
+// 对上下文执行微型压缩和摘要压缩
+async function compactContext(messages: ModelMessage[], summary = '') {
   const beforeTokens = estimateTokens(messages);
   console.log(`\n[压缩前] ${messages.length} 条消息, ~${beforeTokens} tokens`);
 
@@ -180,6 +170,7 @@ async function main() {
   messages = compResult.messages;
   summary = compResult.summary;
   const afterSumTokens = estimateTokens(messages);
+
   if (compResult.compressedCount > 0) {
     console.log(`[Layer 2: Summarization] 压缩了 ${compResult.compressedCount} 条消息, ~${afterSumTokens} tokens`);
     console.log(`[摘要预览] ${summary.slice(0, 150)}...`);
@@ -189,9 +180,72 @@ async function main() {
 
   console.log(`[压缩后] ${messages.length} 条消息, ~${afterSumTokens} tokens (节省 ${beforeTokens - afterSumTokens} tokens)\n`);
 
+  return { messages, summary, compressedCount: compResult.compressedCount };
+}
+
+/**
+ * 程序入口：完成工具与会话初始化，然后启动命令行对话循环。
+ *
+ * 与本章“三层即时防线”相关的状态有三份：
+ * - messages：真正会发送给模型的上下文，也是防御函数直接处理的数据；
+ * - timestamps：按 messages 的数组索引记录创建时间，供 Layer 3 判断消息年龄；
+ * - tracker：保存最近一次精确输入 token 基线及后续消息字符增量，用于快速估算状态。
+ *
+ * applyDefense() 负责执行实际防御，顺序为 Layer 2 动态截断、Layer 3 TTL 清理，
+ * 最后由 Layer 1 对处理后的消息估算 token；tracker 则同步记录防御前后的字符差值。
+ */
+async function main() {
+  // 先连接真实或 Mock MCP，使后续工具统计和模型调用能拿到完整的工具集合。
+  await connectMCP()
+
+  // 注册额外的模拟 MCP 工具，用于演示工具定义过多带来的上下文膨胀。
+  const simCount = registerSimulatedTools();
+  console.log(`  已注册 ${simCount} 个模拟 MCP 工具（Notion/Browser/Supabase）`);
+
+  // 输出活跃工具、延迟工具及其 Schema 大致占用的 token。
+  registerTools()
+
+  // messages 与 timestamps 必须保持相同的索引语义：消息增删或重排后要同步维护时间戳。
+  let messages: ModelMessage[] = [];
+  let timestamps = new Map<number, number>();
+
+  // 恢复持久化会话；没有可恢复会话时会注入带时间戳的模拟历史用于防御演示。
+  const session = initializeSession(messages, timestamps);
+  messages = session.messages;
+  const { sessionId, store } = session;
+
+  //#region 三层防御
+
+  // 启动阶段的教学演示：先记录防御前大小，便于和处理结果进行对比。
+  // estimateMessageTokens() 是一次性估算；正式对话开始后再创建 tracker 持续跟踪状态。
+  const beforeTokens = estimateMessageTokens(messages);
+  console.log(`\n=== 三层即时防线 ===`);
+  console.log(`[防线前] ${messages.length} 条消息, ~${beforeTokens} tokens`);
+
+  // 一次调用串起三层防御：
+  // Layer 2 先检查单个工具输出及整体字符预算；Layer 3 按消息年龄执行 TTL 清理；
+  // Layer 1 最后估算处理完成后的 token 数，并随各层统计一起返回。
+  const defense = applyDefense(messages, timestamps);
+  // 从这里开始，后续逻辑只能使用经过防御的消息，避免把原始大结果重新送给模型。
+  messages = defense.messages;
+  console.log(`[Layer 2: 截断] ${defense.truncated} 个超长结果被截断`);
+  console.log(`[Layer 3: TTL] ${defense.softPruned} 个软修剪, ${defense.hardPruned} 个硬清除`);
+  console.log(`[防线后] ${messages.length} 条消息, ~${defense.tokenEstimate} tokens (节省 ${beforeTokens - defense.tokenEstimate})`);
+  console.log(`====================\n`);
+
+  // 启动演示结束后清空模拟历史，让正式聊天和 Mock 模型从干净上下文开始。
+  messages = [];
+  // 消息已经清空，对应的索引时间戳也必须一起清空，防止新消息误用旧消息年龄。
+  timestamps.clear();
+
+  // 正式对话从空上下文开始，此时 tracker 的 0 基线与 messages 完全一致。
+  const tracker = new TokenTracker();
+  // 保存最近一次摘要，后续压缩会将它与新产生的旧历史再次合并，避免遗忘更早信息。
+  let summary = '';
+
   //#endregion
 
-  // Prompt Pipe 组装 system prompt
+  // Prompt Pipe 只组装 system prompt；它不在 messages 中，也不参与下面的 TTL 清理。
   const builder = new PromptBuilder()
     .pipe('coreRules', coreRules())
     .pipe('toolGuide', toolGuide())
@@ -207,7 +261,7 @@ async function main() {
 
   const SYSTEM = builder.build(promptCtx);
 
-  // Debug: 显示 Prompt Pipe 各模块状态
+  // 显示 Prompt Pipe 各模块状态，便于观察最终 system prompt 的组成。
   builder.debug(promptCtx)
 
   // node readline 模块
@@ -217,9 +271,61 @@ async function main() {
     output: process.stdout, // 标准输出，终端显示
   })
 
+  // 教学快捷命令：直接修改当前上下文或执行防御，不发起模型调用。
+  function handleQuickTrigger(cmd: string): boolean {
+    const now = Date.now();
+
+    if (cmd === '模拟长对话' || cmd === 'sim') {
+      console.log('\n[模拟] 注入 20 条历史消息（含大量工具结果）...');
+      const beforeLen = messages.length;
+      for (let i = 0; i < 5; i++) {
+        // 为每组模拟消息制造不同年龄，确保能覆盖未过期、软 TTL 和硬 TTL 场景。
+        const age = (20 - i * 4) * 60 * 1000;
+        const userIdx = messages.length;
+        messages.push({ role: 'user', content: `第 ${i + 1} 轮：帮我读文件 file-${i}.ts` });
+        timestamps.set(userIdx, now - age);
+        messages.push({ role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: `sim-${i}`, toolName: 'read_file', input: { path: `file-${i}.ts` } }] });
+        timestamps.set(userIdx + 1, now - age);
+        const bigContent = `// file-${i}.ts\n` + 'export function handler() {\n  // ...\n}\n'.repeat(200);
+        messages.push({ role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: `sim-${i}`, toolName: 'read_file', output: textToolResultOutput(bigContent) }] });
+        timestamps.set(userIdx + 2, now - age);
+        messages.push({ role: 'assistant', content: [{ type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` }] });
+        timestamps.set(userIdx + 3, now - age);
+      }
+      // 新注入的历史尚未经过服务端 token 统计，因此先按消息字符数加入 tracker 增量。
+      tracker.addMessages(messages.slice(beforeLen));
+      const tokens = estimateMessageTokens(messages);
+      console.log(`[模拟完成] ${messages.length} 条消息, ~${tokens} tokens\n`);
+      return true;
+    }
+
+    if (cmd === '执行防线' || cmd === 'defend') {
+      console.log('\n--- 执行三层防线 ---');
+      const before = estimateMessageTokens(messages);
+      const def = applyDefense(messages, timestamps);
+      // 先记录新旧消息差值，再把当前上下文切换成防御后的结果。
+      tracker.replaceMessages(messages, def.messages);
+      messages = def.messages;
+      console.log(`  [Layer 2] 截断: ${def.truncated} 条, 预算清理: ${def.compacted} 条`);
+      console.log(`  [Layer 3] 软修剪: ${def.softPruned}, 硬清除: ${def.hardPruned}`);
+      console.log(`  [结果] ~${before} → ~${def.tokenEstimate} tokens (节省 ${before - def.tokenEstimate})\n`);
+      return true;
+    }
+
+    if (cmd === '查看状态' || cmd === 'status') {
+      // status 基于“最近精确 inputTokens + 后续字符增量”返回当前估算和窗口占比。
+      const status = tracker.status;
+      const toolMsgs = messages.filter(m => m.role === 'tool').length;
+      console.log(`\n[状态] ${messages.length} 条消息 (${toolMsgs} 条工具结果), ~${status.tokens} tokens (${status.percent}%)\n`);
+      return true;
+    }
+
+    return false;
+  }
+
 
   // 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
-  const budget: BudgetState = { used: 0, limit: 50000 };
+  // const budget: BudgetState = { used: 0, limit: 50000 };
 
   function ask() {
     // 提问并等待用户输入
@@ -231,49 +337,76 @@ async function main() {
         return
       }
 
+      if (handleQuickTrigger(trimmed)) {
+        ask();
+        return;
+      }
+
       const userMsg: ModelMessage = { role: 'user', content: trimmed };
 
       // 将用户本次的输入加入到 message
       messages.push(userMsg);
       store.append(userMsg);
 
-      const beforeLen = messages.length;
+      // 用户消息还没有被服务端计入 inputTokens，先作为字符增量加入 tracker。
+      tracker.addMessage(userMsg);
+      // TTL 使用 messages 索引查找创建时间，因此要在 push 后记录当前索引。
+      timestamps.set(messages.length - 1, Date.now());
 
-      await agentLoop(model, registry, messages, SYSTEM, budget)
+      // 每次请求模型前都执行三层防御，保证真正发出的 messages 已受体积和年龄限制。
+      const turnDefense = applyDefense(messages, timestamps);
+      // 防御可能截断或替换消息内容，用前后字符差修正 tracker 的 pendingChars。
+      tracker.replaceMessages(messages, turnDefense.messages);
+      messages = turnDefense.messages;
+
+      // 即时防御后上下文仍达到 75% 时，再启用成本更高的微型压缩和 LLM 摘要。
+      if (tracker.status.needsAction) {
+        const compactedContext = await compactContext(messages, summary);
+
+        // 压缩会改变消息内容甚至数量，因此 tracker 也要记录压缩前后的字符差。
+        tracker.replaceMessages(messages, compactedContext.messages);
+        messages = compactedContext.messages;
+        summary = compactedContext.summary;
+
+        // 摘要会把旧消息前缀替换为一条新消息，必须同步重映射 TTL 的索引时间戳。
+        timestamps = remapTimestampsAfterCompaction(
+          timestamps,
+          compactedContext.compressedCount,
+          messages.length,
+        );
+      }
+
+      // 记住调用前的长度，agentLoop 返回后即可切出本轮新增的 assistant/tool 消息。
+      const beforeLen = messages.length;
+      // agentLoop 内会用本轮 inputTokens 校准 tracker，再把响应消息加入 tracker 增量。
+      await agentLoop(model, registry, messages, SYSTEM, tracker)
 
       // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
       const newMessages = messages.slice(beforeLen);
       store.appendAll(newMessages);
 
+      const now = Date.now();
+      // agentLoop 新增的消息统一记录为本轮完成时间，供之后的 TTL 防御判断年龄。
+      for (let i = beforeLen; i < messages.length; i++) {
+        timestamps.set(i, now);
+      }
+
+      // 展示校准后的输入基线加上本轮新增消息所得的下一轮上下文估算。
+      const status = tracker.status;
+      console.log(`  [Token] ~${status.tokens} tokens (${status.percent}%)`);
+
       ask()
     })
   }
 
-  console.log('\nSuper Agent v0.6 — Dynamic Tools (type "exit" to quit)');
-  console.log('试试："查看 vercel/ai 的 issues"（会触发 tool_search）\n');
+  console.log('Super Agent v0.9 — Context Defense (type "exit" to quit)');
+  console.log('快捷命令：');
+  console.log('  模拟长对话 / sim    — 注入 20 条模拟历史（含大工具结果）');
+  console.log('  执行防线 / defend   — 执行三层防线，查看截断和修剪效果');
+  console.log('  查看状态 / status   — 查看当前消息数和 token 估算\n');
   ask()
 }
 
-function injectFakeHistory(messages: ModelMessage[]) {
-  const fakeHistory: ModelMessage[] = [
-    { role: 'user', content: '帮我看看当前目录有什么文件' },
-    { role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: 'fake-1', toolName: 'list_directory', input: { path: '.' } }] },
-    { role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: 'fake-1', toolName: 'list_directory', output: textToolResultOutput('[FILE] .env\n[DIR] node_modules\n[FILE] package.json\n[FILE] sample-data.txt\n[DIR] src\n[FILE] tsconfig.json') }] },
-    { role: 'assistant', content: [{ type: 'text' as const, text: '当前目录有以下文件：.env, package.json, sample-data.txt, tsconfig.json，以及 src 和 node_modules 两个目录。' }] },
-    { role: 'user', content: '读一下 package.json' },
-    { role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: 'fake-2', toolName: 'read_file', input: { path: 'package.json' } }] },
-    { role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: 'fake-2', toolName: 'read_file', output: textToolResultOutput('{\n  "name": "super-agent-08-compaction",\n  "version": "0.8.0",\n  "type": "module",\n  "scripts": { "start": "tsx src/index.ts" },\n  "dependencies": { "ai": "5.0.98", "@ai-sdk/openai": "2.0.44" }\n}') }] },
-    { role: 'assistant', content: [{ type: 'text' as const, text: 'package.json 的内容：项目名 super-agent-08-compaction，版本 0.8.0，依赖 ai 和 @ai-sdk/openai。' }] },
-    { role: 'user', content: '读一下 sample-data.txt' },
-    { role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: 'fake-3', toolName: 'read_file', input: { path: 'sample-data.txt' } }] },
-    { role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: 'fake-3', toolName: 'read_file', output: textToolResultOutput('Super Agent 工具系统设计文档\n=============================\n\n一、工具注册机制\n每个工具通过 ToolRegistry 统一注册，提供名称、描述、参数 Schema 和执行函数。\n\n二、结果截断策略\nHead/Tail 60/40 分割，保留文件头部和尾部的关键信息。\n\n三、并发控制\n读写锁模式：只读工具共享锁，读写工具独占锁。\n\n四、最佳实践\n1. 工具描述要写"什么时候不该用"比"能干什么"更有价值\n2. 参数描述要具体——"必须是绝对路径"能防一大类错误\n3. 错误信息要对模型友好——模型需要理解为什么失败才能换策略\n4. 结果格式要结构化——JSON 比自然语言更容易被模型准确解析') }] },
-    { role: 'assistant', content: [{ type: 'text' as const, text: 'sample-data.txt 是一份工具系统设计文档，包含四个部分：工具注册机制、结果截断策略、并发控制和最佳实践。' }] },
-    { role: 'user', content: '帮我搜索一下 src 目录里有哪些 export' },
-    { role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: 'fake-4', toolName: 'grep', input: { pattern: 'export', path: 'src' } }] },
-    { role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: 'fake-4', toolName: 'grep', output: textToolResultOutput('src/tools.ts:1: export const weatherTool\nsrc/tools.ts:20: export const calculatorTool\nsrc/tools.ts:40: export const readFileTool\nsrc/tool-registry.ts:4: export interface ToolDefinition\nsrc/tool-registry.ts:18: export class ToolRegistry\nsrc/agent-loop.ts:7: export async function agentLoop\nsrc/session-store.ts:8: export class SessionStore\nsrc/prompt-builder.ts:12: export class PromptBuilder\nsrc/context-compressor.ts:30: export function microcompact\nsrc/context-compressor.ts:80: export async function summarize') }] },
-    { role: 'assistant', content: [{ type: 'text' as const, text: 'src 目录里的主要导出：tools.ts 导出了各种工具定义，tool-registry.ts 导出了 ToolRegistry 类，agent-loop.ts 导出了 agentLoop 函数，还有 SessionStore、PromptBuilder、microcompact 和 summarize 等。' }] },
-  ];
-  messages.push(...fakeHistory);
-}
+
 
 main().catch(console.error);

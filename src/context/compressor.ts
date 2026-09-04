@@ -126,6 +126,31 @@ export interface CompactionResult {
 }
 
 /**
+ * 摘要压缩会把旧消息前缀替换成一条摘要消息，因此需要同步调整基于消息索引的时间戳。
+ * compressedCount 为 0 时消息没有重排，直接复制原映射；否则新索引 0 属于摘要，
+ * 后续消息依次对应旧列表中从 compressedCount 开始保留的消息。
+ */
+export function remapTimestampsAfterCompaction(
+  timestamps: Map<number, number>,
+  compressedCount: number,
+  compactedMessageCount: number,
+  summaryTimestamp = Date.now(),
+): Map<number, number> {
+  if (compressedCount === 0) return new Map(timestamps);
+
+  const remapped = new Map<number, number>();
+  remapped.set(0, summaryTimestamp);
+
+  for (let newIndex = 1; newIndex < compactedMessageCount; newIndex++) {
+    const oldIndex = compressedCount + newIndex - 1;
+    const timestamp = timestamps.get(oldIndex);
+    if (timestamp !== undefined) remapped.set(newIndex, timestamp);
+  }
+
+  return remapped;
+}
+
+/**
  * 使用大模型压缩较早的对话，并保留最近消息原文。
  * existingSummary 用于多次压缩：新摘要会同时吸收旧摘要和新增的历史消息。
  */

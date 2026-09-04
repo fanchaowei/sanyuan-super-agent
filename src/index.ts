@@ -23,7 +23,7 @@ import {
 } from './context/prompt-builder.js'
 import { textToolResultOutput } from './context/tool-result-output'
 import { MCPClient, MockMCPClient } from './mcp/mcp-client-sdk'
-import { injectFakeHistory_lesson12, simulatedTools } from './mock'
+import { simulatedTools } from './mock'
 import { createMockModel } from './mock-model'
 import { SessionStore } from './session/store'
 import { ToolRegistry, type ToolDefinition } from './tools/tool-registry'
@@ -136,7 +136,7 @@ function registerTools() {
 }
 
 // 初始化 Session，并根据启动参数恢复历史消息
-function initializeSession(messages: ModelMessage[], timestamps: Map<number, number>) {
+function initializeSession(messages: ModelMessage[]) {
   const isContinue = process.argv.includes('--continue');
   const sessionId = 'default';
   const store = new SessionStore(sessionId);
@@ -145,10 +145,7 @@ function initializeSession(messages: ModelMessage[], timestamps: Map<number, num
     messages = store.load();
     console.log(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条历史消息`);
   } else {
-    // 注入模拟历史，演示压缩效果
-    injectFakeHistory_lesson12(messages, timestamps);
     console.log(`\n[Session] 新会话 "${sessionId}"`);
-    console.log(`\n[Session] 新会话（已注入 ${messages.length} 条模拟历史，时间跨度 12 分钟）`);
   }
 
   return { messages, sessionId, store };
@@ -210,40 +207,14 @@ async function main() {
   let timestamps = new Map<number, number>();
 
   // 恢复持久化会话；没有可恢复会话时会注入带时间戳的模拟历史用于防御演示。
-  const session = initializeSession(messages, timestamps);
+  const session = initializeSession(messages);
   messages = session.messages;
   const { sessionId, store } = session;
-
-  //#region 三层防御
-
-  // 启动阶段的教学演示：先记录防御前大小，便于和处理结果进行对比。
-  // estimateMessageTokens() 是一次性估算；正式对话开始后再创建 tracker 持续跟踪状态。
-  const beforeTokens = estimateMessageTokens(messages);
-  console.log(`\n=== 三层即时防线 ===`);
-  console.log(`[防线前] ${messages.length} 条消息, ~${beforeTokens} tokens`);
-
-  // 一次调用串起三层防御：
-  // Layer 2 先检查单个工具输出及整体字符预算；Layer 3 按消息年龄执行 TTL 清理；
-  // Layer 1 最后估算处理完成后的 token 数，并随各层统计一起返回。
-  const defense = applyDefense(messages, timestamps);
-  // 从这里开始，后续逻辑只能使用经过防御的消息，避免把原始大结果重新送给模型。
-  messages = defense.messages;
-  console.log(`[Layer 2: 截断] ${defense.truncated} 个超长结果被截断`);
-  console.log(`[Layer 3: TTL] ${defense.softPruned} 个软修剪, ${defense.hardPruned} 个硬清除`);
-  console.log(`[防线后] ${messages.length} 条消息, ~${defense.tokenEstimate} tokens (节省 ${beforeTokens - defense.tokenEstimate})`);
-  console.log(`====================\n`);
-
-  // 启动演示结束后清空模拟历史，让正式聊天和 Mock 模型从干净上下文开始。
-  messages = [];
-  // 消息已经清空，对应的索引时间戳也必须一起清空，防止新消息误用旧消息年龄。
-  timestamps.clear();
 
   // 正式对话从空上下文开始，此时 tracker 的 0 基线与 messages 完全一致。
   const tracker = new TokenTracker();
   // 保存最近一次摘要，后续压缩会将它与新产生的旧历史再次合并，避免遗忘更早信息。
   let summary = '';
-
-  //#endregion
 
   // Prompt Pipe 只组装 system prompt；它不在 messages 中，也不参与下面的 TTL 清理。
   const builder = new PromptBuilder()

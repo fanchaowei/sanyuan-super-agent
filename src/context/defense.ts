@@ -1,6 +1,11 @@
 import type { ModelMessage } from 'ai';
 import { textToolResultOutput, toolResultOutputToText } from './tool-result-output.js';
 
+/** 将字符数换算为 token，并为中文等高密度内容保留 20% 安全余量。 */
+function estimateCharsToTokens(chars: number): number {
+  return Math.ceil((chars / 4) * 1.2);
+}
+
 // ── Layer 1: Token Estimation ────────────────────────
 
 /**
@@ -38,10 +43,10 @@ export class TokenTracker {
     this.pendingChars += countMessagesChars(after) - countMessagesChars(before);
   }
 
-  /** 按平均每 4 个字符约 1 个 token 估算当前上下文大小。 */
+  /** 以最近的精确值为基线，使用统一的字符换算规则估算后续增减量。 */
   get estimatedTokens(): number {
     // 替换或压缩可能产生负增量，但总 token 数不应小于 0。
-    return Math.max(0, this.lastPreciseCount + Math.ceil(this.pendingChars / 4));
+    return Math.max(0, this.lastPreciseCount + estimateCharsToTokens(this.pendingChars));
   }
 
   /** 返回上下文占用比例，并在达到 75% 时提示上层采取压缩等措施。 */
@@ -91,8 +96,7 @@ function countMessagesChars(messages: ModelMessage[]): number {
 
 export function estimateMessageTokens(messages: ModelMessage[]): number {
   const chars = countMessagesChars(messages);
-  // 中文通常比英文消耗更多 token，因此在字符估算结果上增加 20% 安全余量。
-  return Math.ceil((chars / 4) * 1.2);
+  return estimateCharsToTokens(chars);
 }
 
 // ── Layer 2: Dynamic Tool Result Truncation ──────────

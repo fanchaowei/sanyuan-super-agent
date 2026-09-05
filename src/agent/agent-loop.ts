@@ -1,6 +1,6 @@
 import { streamText, type ModelMessage } from 'ai';
-import { TokenTracker } from '../context/defense.js';
 import { ToolRegistry } from '../tools/tool-registry.js';
+import { normalizeUsage, type UsageTracker } from '../usage/tracker.js';
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js';
 import { calculateDelay, isRetryable, sleep } from './retry.js';
 
@@ -15,7 +15,7 @@ export async function agentLoop(
   registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
-  tracker: TokenTracker
+  tracker: UsageTracker
 ) {
   let step = 0;
   let totalTokens = 0;
@@ -124,26 +124,20 @@ export async function agentLoop(
       break;
     }
 
-    // Token 预算追踪：tracker 由调用方持有，跨轮累计。
-    // 不同 provider / SDK 版本返回的 usage 结构可能不同：
-    // 有的直接是 number，有的是 { total }，所以这里做兼容读取。
-    // inp、out 分别是本轮输入和输出 token 数；兼容数值及 { total } 两种结构。
-    // usage 缺失或结构不符合预期时按 0 处理，避免预算计算出现 NaN。
-    const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : (stepUsage?.inputTokens?.total ?? 0);
-    const out = typeof stepUsage?.outputTokens === 'number' ? stepUsage.outputTokens : (stepUsage?.outputTokens?.total ?? 0);
+    messages.push(...stepResponse!.messages);
 
-    // 输入 token 是服务端针对完整 prompt 的精确统计，用它重新校准 tracker 的估算基线。
-    if (inp > 0) tracker.updateFromAPI(inp);
+    // 把 usage 喂给 tracker；tracker 内部按四类 token 分别累加并算 cost
+    const norm = normalizeUsage(stepUsage);
+    const stepRecord = tracker?.record(model?.modelId || 'mock-model', norm);
+    totalTokens += norm.inputTokens + norm.outputTokens + norm.cacheReadTokens + norm.cacheWriteTokens;
 
-    // responseMessages 包含本轮产生的 assistant 消息和工具相关消息。
-    const responseMessages = stepResponse!.messages as ModelMessage[];
-    // 保存本轮 assistant/tool 消息，下一轮模型才能看到刚才的输出和工具结果。
-    messages.push(...responseMessages);
-    // tracker 记录新增消息的字符增量，用于下一次服务端精确统计返回前估算 token。
-    tracker.addMessages(responseMessages);
+    // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
+    if (stepRecord && (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)) {
+      const tag = norm.cacheReadTokens > 0 ? `\x1b[38;5;36m✓ cache hit\x1b[0m` : `\x1b[38;5;220m✎ cache write\x1b[0m`;
+      const detail = norm.cacheReadTokens > 0 ? `read ${norm.cacheReadTokens}` : `write ${norm.cacheWriteTokens}`;
+      console.log(`  [${tag}] ${detail} tokens · 本步 $${stepRecord.cost.toFixed(5)}`);
+    }
 
-    // 累加每轮实际输入与输出 token，用于控制整个任务的总预算，而非单轮预算。
-    totalTokens += inp + out;
     // 超过 90% 时只输出预警，不会立即停止循环。
     if (totalTokens > TOKEN_BUDGET * 0.9) {
       console.log(`  [Token] ${totalTokens}/${TOKEN_BUDGET} (${Math.round(totalTokens / TOKEN_BUDGET * 100)}%)`);
@@ -161,7 +155,7 @@ export async function agentLoop(
     }
 
     // 仍有工具调用，继续下一轮，让模型根据工具结果决定后续动作。
-    console.log('  \u2192 继续下一步...');
+    console.log('  → 继续下一步...');
   }
 
   if (step >= MAX_STEPS) {

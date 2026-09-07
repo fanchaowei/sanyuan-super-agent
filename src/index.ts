@@ -10,6 +10,11 @@ import {
   toolGuide,
   type PromptContext,
 } from './context/prompt-builder.js'
+import {
+  buildContextSnapshot,
+  renderContextView,
+  renderUsageView,
+} from './context/views.js'
 import { MCPClient, MockMCPClient } from './mcp/mcp-client-sdk'
 import { simulatedTools } from './mock'
 import { createMockModel } from './mock-model'
@@ -141,6 +146,9 @@ function initializeSession(messages: ModelMessage[]) {
   return { messages, sessionId, store };
 }
 
+function builtInCommand(trimmed: string) {
+}
+
 /**
  * 程序入口：完成工具与会话初始化，然后启动命令行对话循环。
  */
@@ -200,6 +208,38 @@ async function main() {
       if (!trimmed || trimmed === 'exit') {
         console.log('Bye!')
         rl.close()
+        return
+      }
+      if (trimmed === '/context') {
+        const toolDescriptionChars = JSON.stringify(
+          registry.getActiveTools().map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          })),
+        ).length
+
+        const snapshot = buildContextSnapshot({
+          modelName: process.env.DASHSCOPE_API_KEY ? 'Qwen Plus' : 'Mock Model',
+          modelId: process.env.DASHSCOPE_API_KEY
+            ? 'qwen-plus-latest'
+            : 'mock-model',
+          windowTokens: 1_000_000,
+          systemPromptChars: SYSTEM.length,
+          toolDescriptionChars,
+          memoryChars: 0,
+          skillsChars: 0,
+          messages,
+        })
+
+        console.log(renderContextView(snapshot))
+        ask()
+        return
+      }
+
+      if (trimmed === '/usage') {
+        console.log(renderUsageView(tracker))
+        ask()
         return
       }
 

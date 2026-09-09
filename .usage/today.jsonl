@@ -1,1 +1,16 @@
 {"ts":1788761049046,"model":"qwen-plus-latest","cost":0.002047,"inputTokens":1702,"outputTokens":69,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788918474323,"model":"qwen-plus-latest","cost":0.001667,"inputTokens":1627,"outputTokens":8,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788918588412,"model":"qwen-plus-latest","cost":0.001756,"inputTokens":1656,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788918590411,"model":"qwen-plus-latest","cost":0.002187,"inputTokens":1752,"outputTokens":87,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788918648354,"model":"qwen-plus-latest","cost":0.001876,"inputTokens":1851,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788918654041,"model":"qwen-plus-latest","cost":0.001893,"inputTokens":1868,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931115690,"model":"qwen-plus-latest","cost":0.001785,"inputTokens":1650,"outputTokens":27,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931180715,"model":"qwen-plus-latest","cost":0.002034,"inputTokens":1689,"outputTokens":69,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931697498,"model":"qwen-plus-latest","cost":0.002016,"inputTokens":1736,"outputTokens":56,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931698738,"model":"qwen-plus-latest","cost":0.001931,"inputTokens":1816,"outputTokens":23,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931748980,"model":"qwen-plus-latest","cost":0.001971,"inputTokens":1851,"outputTokens":24,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931750179,"model":"qwen-plus-latest","cost":0.002155,"inputTokens":1915,"outputTokens":48,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931774415,"model":"qwen-plus-latest","cost":0.00182,"inputTokens":1730,"outputTokens":18,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788931775574,"model":"qwen-plus-latest","cost":0.001938,"inputTokens":1788,"outputTokens":30,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788934303005,"model":"qwen-plus-latest","cost":0.002101,"inputTokens":1811,"outputTokens":58,"cacheReadTokens":0,"cacheWriteTokens":0}
+{"ts":1788934303990,"model":"qwen-plus-latest","cost":0.001963,"inputTokens":1893,"outputTokens":14,"cacheReadTokens":0,"cacheWriteTokens":0}

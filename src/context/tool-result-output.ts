@@ -2,7 +2,7 @@ import type { ToolResultPart } from 'ai';
 
 // 从 AI SDK 的 ToolResultPart 中提取 output 字段类型。
 // 这是一个带有 type 判别字段的联合类型，switch 可以据此安全地缩小类型范围。
-type ToolResultOutput = ToolResultPart['output'];
+export type ToolResultOutput = ToolResultPart['output'];
 
 /** 将普通字符串包装成 AI SDK 要求的工具结果结构。 */
 export function textToolResultOutput(value: string): ToolResultOutput {

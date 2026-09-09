@@ -1,4 +1,11 @@
-import { type ToolDefinition } from '../tools/tool-registry';
+import { type ToolDefinition, type ToolRegistry } from '../tools/tool-registry';
+
+
+// 模拟额外的 MCP 工具（演示工具膨胀问题）
+export function registerSimulatedTools(registry: ToolRegistry) {
+  registry.register(...simulatedTools);
+  return simulatedTools.length;
+}
 
 export const simulatedTools: ToolDefinition[] = [
   // Notion MCP 模拟

@@ -1,0 +1,45 @@
+import type { ModelMessage } from 'ai';
+import type { PromptBuilder, PromptContext } from '../context/prompt-builder';
+import type { MemoryStore } from '../memory/store';
+import type { SessionStore } from '../session/store';
+import type { ToolRegistry } from '../tools/tool-registry';
+import type { UsageTracker } from '../usage/tracker';
+
+export interface CommandContext {
+  /**
+   * 命令处理器共享的运行时依赖。
+   * 这些对象由入口层创建并注入，处理器本身无需重复初始化会话、工具或 prompt 状态。
+   */
+  messages: ModelMessage[];
+  timestamps: Map<number, number>;
+  registry: ToolRegistry;
+  builder: PromptBuilder;
+  tracker: UsageTracker;
+  sessionStore: SessionStore;
+  model: any;
+  makePromptCtx: () => PromptContext;
+  ask: () => void;
+  memoryStore?: MemoryStore;
+  [key: string]: any;
+}
+
+export type CommandHandler = (cmd: string, ctx: CommandContext) => boolean | 'async';
+
+/**
+ * 按注册顺序尝试执行命令。
+ *
+ * - `true`：命令已处理，入口层应继续下一次提问；
+ * - `'async'`：处理器已接管后续流程（例如等待异步操作），入口层暂不重复提问；
+ * - `false`：当前处理器不匹配，继续交给下一个处理器。
+ *
+ * 所有处理器都未匹配时返回 `false`，调用方即可把输入当作普通用户消息交给模型。
+ */
+export function createDispatcher(handlers: CommandHandler[]): CommandHandler {
+  return (cmd, ctx) => {
+    for (const h of handlers) {
+      const result = h(cmd, ctx);
+      if (result) return result;
+    }
+    return false;
+  };
+}

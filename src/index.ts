@@ -3,28 +3,30 @@ import { type ModelMessage } from 'ai'
 import 'dotenv/config'
 import { createInterface } from 'node:readline'
 import { agentLoop } from './agent/agent-loop'
-// import { MCPClient, MockMCPClient } from './mcp/mcp-client'
+import { contextCommands } from './commands/context'
+import { debugCommands } from './commands/debug'
+import { createDispatcher, type CommandContext } from './commands/index'
+import { memoryCommands } from './commands/memory'
+import { estimateMessageTokens } from './context/defense'
 import {
   PromptBuilder, coreRules,
   deferredTools, sessionContext,
   toolGuide,
   type PromptContext,
 } from './context/prompt-builder.js'
-import {
-  buildContextSnapshot,
-  renderContextView,
-  renderUsageView,
-} from './context/views.js'
-import { MCPClient, MockMCPClient } from './mcp/mcp-client-sdk'
-import { simulatedTools } from './mock'
+import { connectMCP } from './mcp'
+import { MemoryStore } from './memory/store'
 import { createMockModel } from './mock-model'
 import { SessionStore } from './session/store'
-import { ToolRegistry, type ToolDefinition } from './tools/tool-registry'
-import { allTools } from './tools/tools'
+import { allTools } from './tools'
+import { createMemoryTool } from './tools/memory-tools'
+import { ToolRegistry } from './tools/tool-registry'
+import { createToolSearchTool } from './tools/tool-search'
 import { UsageTracker } from './usage/tracker.js'
 
 /**
- * SDK 自动循环
+ * 创建模型适配器：配置了 DashScope Key 时走真实模型，否则使用 Mock 模型，
+ * 这样本地开发和测试不必依赖外部服务。
  */
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -35,90 +37,15 @@ const model: any = process.env.DASHSCOPE_API_KEY
   ? qwen.chat('qwen-plus-latest')
   : createMockModel()
 
-// 注册工具
+// ———— 注册工具 ——————————————————————————————
+// ToolRegistry 同时保存所有工具和当前“活跃”工具；后者会直接参与本轮 prompt，
+// 延迟工具则通过搜索工具按需启用，以控制上下文长度。
 const registry = new ToolRegistry()
 registry.register(...allTools)
+registry.register(createToolSearchTool(registry));
 
-
-// 注册 tool_search 元工具
-const toolSearchTool: ToolDefinition = {
-  name: 'tool_search',
-  description: '获取延迟工具的完整定义。传入工具名（从系统提示的延迟工具列表中选取），返回该工具的完整参数 Schema',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: '工具名，如 "mcp__github__list_issues"。支持逗号分隔多个工具名' },
-    },
-    required: ['query'],
-    additionalProperties: false,
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  execute: async ({ query }: { query: string }) => {
-    const results = registry.searchTools(query);
-    if (results.length === 0) {
-      return `没有找到匹配 "${query}" 的工具`;
-    }
-    return results.map(t => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    }));
-  },
-};
-
-registry.register(toolSearchTool);
-
-async function connectMCP() {
-  const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
-
-  let canSpawn = true;
-  try {
-    const { execSync } = await import('node:child_process');
-    execSync('echo test', { stdio: 'ignore' });
-  } catch {
-    canSpawn = false;
-  }
-
-  if (githubToken && canSpawn) {
-    console.log('\n连接 GitHub MCP Server...');
-    try {
-      const command = process.platform === 'win32' ? 'cmd.exe' : 'npx';
-      const args = process.platform === 'win32'
-        ? ['/d', '/s', '/c', 'npx', '-y', '@modelcontextprotocol/server-github']
-        : ['-y', '@modelcontextprotocol/server-github'];
-
-      const client = new MCPClient(
-        command,
-        args,
-        { GITHUB_PERSONAL_ACCESS_TOKEN: githubToken },
-      )
-      const tools = await registry.registerMCPServer('github', client);
-      console.log(`  已注册 ${tools.length} 个 MCP 工具`);
-      return;
-    } catch (err) {
-      console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`);
-      console.log('  降级为 Mock MCP...');
-    }
-  }
-
-  if (!githubToken) {
-    console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN，使用 Mock MCP');
-  }
-
-  const mockClient = new MockMCPClient();
-  const tools = await registry.registerMCPServer('github', mockClient);
-  console.log(`  已注册 ${tools.length} 个 Mock MCP 工具`);
-}
-
-// 模拟额外的 MCP 工具（演示工具膨胀问题）
-function registerSimulatedTools() {
-  registry.register(...simulatedTools);
-  return simulatedTools.length;
-}
-
-// 注册工具
-function registerTools() {
+// 输出工具规模及其大致 token 成本，便于观察延迟加载是否达到了预期效果。
+function countTools() {
   const allCount = registry.getAll().length;
   const activeTools = registry.getActiveTools();
   const estimate = registry.countTokenEstimate();
@@ -130,7 +57,11 @@ function registerTools() {
   console.log(`  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟)`);
 }
 
-// 初始化 Session，并根据启动参数恢复历史消息
+
+// ———— Session 持久化对话 ——————————————————————————————
+
+// 初始化 Session，并根据启动参数恢复历史消息。
+// 这里统一返回消息数组、会话 ID 和存储对象，避免主循环分别管理三份状态。
 function initializeSession(messages: ModelMessage[]) {
   const isContinue = process.argv.includes('--continue');
   const sessionId = 'default';
@@ -146,24 +77,40 @@ function initializeSession(messages: ModelMessage[]) {
   return { messages, sessionId, store };
 }
 
-function builtInCommand(trimmed: string) {
-}
+// ———— Memory ——————————————————————————————
+
+const memoryStore = new MemoryStore('.')
+memoryStore.init();
+registry.register(createMemoryTool(memoryStore));
+
+// ———— 注册命令 ——————————————————————————————
+// 命令按数组顺序尝试匹配；因此更具体的命令处理器应放在更通用的处理器之前。
+
+const dispatch = createDispatcher([
+  ...debugCommands,
+  ...contextCommands,
+  ...memoryCommands
+]);
 
 /**
  * 程序入口：完成工具与会话初始化，然后启动命令行对话循环。
  */
 async function main() {
   // 先连接真实或 Mock MCP，使后续工具统计和模型调用能拿到完整的工具集合。
-  await connectMCP()
+  await connectMCP(registry)
 
   // 注册额外的模拟 MCP 工具，用于演示工具定义过多带来的上下文膨胀。
-  const simCount = registerSimulatedTools();
-  console.log(`  已注册 ${simCount} 个模拟 MCP 工具（Notion/Browser/Supabase）`);
+  // const simCount = registerSimulatedTools(registry);
+  // console.log(`  已注册 ${simCount} 个模拟 MCP 工具（Notion/Browser/Supabase）`);
 
   // 输出活跃工具、延迟工具及其 Schema 大致占用的 token。
-  registerTools()
+  countTools()
 
+  // messages 是对话的单一事实来源：用户输入先写入，agentLoop 产生的 assistant/tool
+  // 消息再追加到同一个数组，随后统一持久化。
   let messages: ModelMessage[] = [];
+
+  const timestamps = new Map<number, number>();
 
   // 恢复持久化会话。
   const session = initializeSession(messages);
@@ -177,19 +124,9 @@ async function main() {
     .pipe('coreRules', coreRules())
     .pipe('toolGuide', toolGuide())
     .pipe('deferredTools', deferredTools())
+    .pipe('memoryContext', () => memoryStore.buildPromptSection())
     .pipe('sessionContext', sessionContext());
 
-  const promptCtx: PromptContext = {
-    toolCount: registry.getActiveTools().length,
-    deferredToolSummary: registry.getDeferredToolSummary(),
-    sessionMessageCount: messages.length,
-    sessionId,
-  };
-
-  const SYSTEM = builder.build(promptCtx);
-
-  // 显示 Prompt Pipe 各模块状态，便于观察最终 system prompt 的组成。
-  builder.debug(promptCtx)
 
   // node readline 模块
   // 创建一个命令行交互对象，让程序可以从中断读取用户输入，并把提示活输出显示到终端
@@ -198,9 +135,17 @@ async function main() {
     output: process.stdout, // 标准输出，终端显示
   })
 
-  // 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
-  // const budget: BudgetState = { used: 0, limit: 50000 };
+  // 每次构建 prompt 前重新计算上下文，确保工具数量和消息数量反映最新状态。
+  function makePromptCtx(): PromptContext {
+    return {
+      toolCount: registry.getActiveTools().length,
+      deferredToolSummary: registry.getDeferredToolSummary(),
+      sessionMessageCount: messages.length,
+      sessionId: sessionId,
+    };
+  }
 
+  // 递归安排下一次 readline 提问，形成串行交互：上一轮 agentLoop 完成后才接收下一轮输入。
   function ask() {
     // 提问并等待用户输入
     rl.question('\nYou: ', async (input) => {
@@ -210,58 +155,57 @@ async function main() {
         rl.close()
         return
       }
-      if (trimmed === '/context') {
-        const toolDescriptionChars = JSON.stringify(
-          registry.getActiveTools().map(({ name, description, parameters }) => ({
-            name,
-            description,
-            parameters,
-          })),
-        ).length
 
-        const snapshot = buildContextSnapshot({
-          modelName: process.env.DASHSCOPE_API_KEY ? 'Qwen Plus' : 'Mock Model',
-          modelId: process.env.DASHSCOPE_API_KEY
-            ? 'qwen-plus-latest'
-            : 'mock-model',
-          windowTokens: 1_000_000,
-          systemPromptChars: SYSTEM.length,
-          toolDescriptionChars,
-          memoryChars: 0,
-          skillsChars: 0,
-          messages,
-        })
-
-        console.log(renderContextView(snapshot))
-        ask()
-        return
+      const ctx: CommandContext = {
+        messages, timestamps, registry, builder, tracker,
+        sessionStore: store, model, makePromptCtx, ask, memoryStore
       }
 
-      if (trimmed === '/usage') {
-        console.log(renderUsageView(tracker))
-        ask()
-        return
-      }
+      // 命令处理器可以同步完成、异步接管流程，或返回 false 让输入继续走普通对话路径。
+      const handled = dispatch(trimmed, ctx);
+      if (handled === 'async') return;
+      if (handled) { ask(); return; }
 
       const userMsg: ModelMessage = { role: 'user', content: trimmed };
 
       // 将用户本次的输入加入到 message
       messages.push(userMsg);
       store.append(userMsg);
+      timestamps.set(messages.length - 1, Date.now());
+
+
+      const promptCtx = makePromptCtx()
+      const currentSystem = builder.build(promptCtx);
+
+      // 显示 Prompt Pipe 各模块状态，便于观察最终 system prompt 的组成。
+      builder.debug(promptCtx)
 
       // 记住调用前的长度，agentLoop 返回后即可切出本轮新增的 assistant/tool 消息。
       const beforeLen = messages.length;
-      await agentLoop(model, registry, messages, SYSTEM, tracker)
+      await agentLoop(model, registry, messages, currentSystem, tracker)
 
       // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
       const newMessages = messages.slice(beforeLen);
+      const now = Date.now();
+      for (let i = beforeLen; i < messages.length; i++) timestamps.set(i, now);
       store.appendAll(newMessages);
 
+      console.log(`  [Token] ~${estimateMessageTokens(messages)} tokens`);
       ask()
     })
   }
 
-  console.log('Super Agent v0.9 (type "exit" to quit)');
+  console.log('Super Agent v0.11 — Memory System (type "exit" to quit)');
+  console.log('快捷命令：');
+  console.log('  /memory         — 查看所有记忆');
+  console.log('  /memory search  — 搜索记忆');
+  console.log('  /context        — 终端里看 context 占用矩阵');
+  console.log('  /usage          — 累计 token 用量和成本');
+  console.log('  status          — 当前消息数、token 和记忆数');
+  console.log('');
+  console.log(`  已加载 ${memoryStore.list().length} 条历史记忆`);
+  console.log('');
+
   ask()
 }
 

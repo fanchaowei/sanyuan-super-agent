@@ -1,11 +1,11 @@
 /**
- * 使用 SQLite + sqlite-vec + FTS5 处理 RAG 的版本
+ * 使用内存数组处理的版本
  */
 
 import type { ModelMessage } from 'ai';
 import type { PromptBuilder, PromptContext } from '../context/prompt-builder';
 import type { MemoryStore } from '../memory/store';
-import type { SqliteVectorStore } from '../rag/sqlite-store';
+import type { VectorStore } from '../rag/store';
 import type { SessionStore } from '../session/store';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { UsageTracker } from '../usage/tracker';
@@ -24,7 +24,7 @@ export interface CommandContext {
   model: any;
   makePromptCtx: () => PromptContext;
   ask: () => void;
-  vectorStore: SqliteVectorStore;
+  vectorStore: VectorStore;
   memoryStore?: MemoryStore;
   [key: string]: any;
 }

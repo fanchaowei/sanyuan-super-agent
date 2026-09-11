@@ -1,4 +1,4 @@
-import type { CommandHandler } from './index.js';
+import type { CommandHandler } from './index.ts.callback';
 
 export const memoryCommands: CommandHandler[] = [
   (cmd, ctx) => {

@@ -19,7 +19,7 @@ const VECTOR_WEIGHT = 0.7;
 const KEYWORD_WEIGHT = 0.3;
 /** 两路检索各自保留的候选数量相对 topK 的放大倍数。 */
 const CANDIDATE_MULTIPLIER = 4;
-/** MMR 中相关性项的权重，越大越偏向高分结果。 */
+/** MMR 中相关性项的权重，越大越偏向高分结果、不看多样性。越小则越注重多样性 */
 const MMR_LAMBDA = 0.7;
 
 /**
@@ -132,6 +132,8 @@ function bm25Score(queryTerms: string[], docText: string, N: number, allDocs: St
   const b = 0.75;
   // 当前文档的词元及所有文档的平均词元长度。
   const docTokens = tokenize(docText);
+  // BM25 的平均文档长度：avgdl = Σ|D| / N。
+  // 它是长度归一化的基准，用来判断当前文档相对整个语料库是偏长还是偏短。
   const avgDl = allDocs.reduce((s, d) => s + tokenize(d.text).length, 0) / (N || 1);
   // 当前文档长度和最终累计分数。
   const dl = docTokens.length;
@@ -143,9 +145,17 @@ function bm25Score(queryTerms: string[], docText: string, N: number, allDocs: St
     const tf = docTokens.filter(t => t === term).length;
     // 包含当前词的文档数，用于衡量该词的区分度。
     const df = allDocs.filter(d => tokenize(d.text).includes(term)).length;
-    // 逆文档频率：越少见的词，贡献越大。
+    // BM25 常用的平滑 IDF 公式：
+    //   IDF(t) = ln((N - df(t) + 0.5) / (df(t) + 0.5) + 1)
+    // N 是文档总数，df(t) 是包含词 t 的文档数；0.5 用于避免极端值，+1 保证结果非负。
+    // 因此，词越少见，IDF 越大，对最终相关性得分的贡献越大。
     const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1);
-    // 对词频进行饱和处理，并按文档长度校正。
+    // BM25 的 TF 与长度归一化公式：
+    //   TFNorm = tf * (k1 + 1) /
+    //            (tf + k1 * (1 - b + b * dl / avgdl))
+    // tf 是词在当前文档中的出现次数，dl/avgdl 是当前文档与平均文档的长度比。
+    // 分母使 TF 增长逐渐饱和，避免重复出现无限增加分数；文档越长，长度惩罚越明显。
+    // k1 控制 TF 饱和速度（此处为 1.2），b 控制长度校正强度（此处为 0.75）。
     const tfNorm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / avgDl)));
     score += idf * tfNorm;
   }
@@ -166,7 +176,14 @@ function normalizeMinMax(scores: number[]): number[] {
   return scores.map(s => (s - min) / range);
 }
 
-/** 使用 Sigmoid 将任意 BM25 分数平滑压缩到 (0, 1)。 */
+/**
+ * 使用 Logistic Sigmoid 将分数平滑压缩到 (0, 1)：sigmoid(s) = 1 / (1 + e^(-s))。
+ *
+ * s 越大，结果越接近 1；s 越小，结果越接近 0；s = 0 时结果为 0.5。
+ * 这里用于把 BM25 分数转换为便于和向量分数加权融合的有限范围值，
+ * 只是分数变换，并不代表经过概率校准的“相关概率”。由于 BM25 通常非负，
+ * 本项目实际结果通常落在 [0.5, 1)；若分数整体很大，还可能集中在 1 附近。
+ */
 function normalizeViaSigmoid(scores: number[]): number[] {
   return scores.map(s => 1 / (1 + Math.exp(-s)));
 }
@@ -179,7 +196,7 @@ function normalizeViaSigmoid(scores: number[]): number[] {
  * 处理流程：先保留最高融合分数的结果 → 每轮计算剩余候选的相关性与重复惩罚 →
  * 选择 MMR 分数最高者 → 直到达到 topK 或候选耗尽。
  */
-function mmrSelect(results: SearchResult[], topK: number): SearchResult[] {
+export function mmrSelect(results: SearchResult[], topK: number): SearchResult[] {
   // 候选数不超过目标数时无需额外筛选。
   if (results.length <= topK) return results;
 

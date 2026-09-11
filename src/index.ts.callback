@@ -1,5 +1,5 @@
 /**
- * 使用 SQLite + sqlite-vec + FTS5 处理 RAG 的版本
+ * 使用内存数组处理的版本
  */
 
 import { createOpenAI } from '@ai-sdk/openai'
@@ -7,32 +7,32 @@ import { type ModelMessage } from 'ai'
 import 'dotenv/config'
 import fs from 'node:fs'
 import { createInterface } from 'node:readline'
-import { agentLoop } from './agent/agent-loop'
-import { createDispatcher, type CommandContext } from './commands'
-import { contextCommands } from './commands/context'
-import { debugCommands } from './commands/debug'
-import { memoryCommands } from './commands/memory'
-import { ragCommands } from './commands/rag'
-import { estimateMessageTokens } from './context/defense'
+import { agentLoop } from './agent/agent-loop.js'
+import { contextCommands } from './commands/context.js'
+import { debugCommands } from './commands/debug.js'
+import { createDispatcher, type CommandContext } from './commands/index'
+import { memoryCommands } from './commands/memory.js'
+import { ragCommands } from './commands/rag.js'
+import { estimateMessageTokens } from './context/defense.js'
 import {
   PromptBuilder, coreRules,
   deferredTools, sessionContext,
   toolGuide,
   type PromptContext,
 } from './context/prompt-builder.js'
-import { connectMCP } from './mcp'
-import { MemoryStore } from './memory/store'
-import { createMockModel } from './mock-model'
-import { chunkDocument } from './rag/chunker'
-import { createDashScopeEmbedder, createMockEmbedder, embed } from './rag/embedder'
-import { SqliteVectorStore } from './rag/sqlite-store.js'
-import { SessionStore } from './session/store'
-import { allTools } from './tools'
-import { createMemoryTool } from './tools/memory-tools'
-import { createRagTools } from './tools/rag-tools'
-import { ToolRegistry } from './tools/tool-registry'
-import { createToolSearchTool } from './tools/tool-search'
-import { UsageTracker } from './usage/tracker'
+import { connectMCP } from './mcp/index.js'
+import { MemoryStore } from './memory/store.js'
+import { createMockModel } from './mock-model.js'
+import { chunkDocument } from './rag/chunker.js'
+import { createDashScopeEmbedder, createMockEmbedder, embed } from './rag/embedder.js'
+import { VectorStore } from './rag/store.js'
+import { SessionStore } from './session/store.js'
+import { allTools } from './tools/index.js'
+import { createMemoryTool } from './tools/memory-tools.js'
+import { createRagTools } from './tools/rag-tools.js'
+import { ToolRegistry } from './tools/tool-registry.js'
+import { createToolSearchTool } from './tools/tool-search.js'
+import { UsageTracker } from './usage/tracker.js'
 
 /**
  * 创建模型适配器：配置了 DashScope Key 时走真实模型，否则使用 Mock 模型，
@@ -69,7 +69,7 @@ function countTools() {
 
 // ———— RAG ———————————————————————————————————————————
 
-const vectorStore = new SqliteVectorStore('knowledge.db');
+const vectorStore = new VectorStore();
 const embedFn = process.env.DASHSCOPE_API_KEY
   ? createDashScopeEmbedder(process.env.DASHSCOPE_API_KEY)
   : createMockEmbedder();
@@ -222,8 +222,7 @@ async function main() {
   console.log('  status          — 当前状态');
   console.log('');
 
-  // 仅在知识库为空时执行首次自动导入，避免每次启动重复写入 sqlite-vec。
-  if (vectorStore.size() === 0 && fs.existsSync('docs')) {
+  if (fs.existsSync('docs')) {
     const files = fs.readdirSync('docs').filter(f => f.endsWith('.md'));
     if (files.length > 0) {
       console.log(`  发现 ${files.length} 个文档，自动导入知识库...`);
@@ -237,8 +236,6 @@ async function main() {
       }
       console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`);
     }
-  } else if (vectorStore.size() > 0) {
-    console.log(`  知识库已有 ${vectorStore.size()} 个片段，跳过自动导入\n`);
   }
 
   ask()

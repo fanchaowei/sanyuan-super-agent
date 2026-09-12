@@ -1,7 +1,7 @@
 import { applyDefense, estimateMessageTokens } from '../context/defense';
 import { ToolResultOutput } from '../context/tool-result-output';
 import { setCacheEnabled } from '../mock-model';
-import type { CommandHandler } from './index.ts.callback';
+import type { CommandHandler } from './index.ts';
 
 export const debugCommands: CommandHandler[] = [
   (cmd, ctx) => {

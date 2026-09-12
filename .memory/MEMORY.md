@@ -1,4 +1,6 @@
 # Memory Index
-
-- [learning_agent_development](user_learning-agent-development.md) — 用户正在学习 agent 开发
-- [memory_feature_launch](project_memory-feature-launch.md) — 记录 memory 功能上线日期
+- [legacy-auth-module](project_legacy-auth-module.md) — 项目认证模块的历史实现
+- [deploy-process](project_deploy-process.md) — 部署流程的关键步骤
+- [typescript-preference](user_typescript-preference.md) — 我偏好 TypeScript 而不是 JavaScript
+- [old-build-config](project_old-build-config.md) — 旧的构建配置位置
+- [deploy-process-2](project_deploy-process-2.md) — 部署流程的备份说明

@@ -1,4 +1,4 @@
-import type { CommandHandler } from './index.ts.callback';
+import type { CommandHandler } from './index.ts';
 
 export const ragCommands: CommandHandler[] = [
   (cmd, ctx) => {

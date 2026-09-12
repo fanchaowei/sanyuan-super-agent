@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 // 路径 API，用于以跨平台方式拼接记忆目录和文件路径。
 import path from 'node:path';
+import { bm25Search, type SearchHit } from './search.js';
+import { lintAll, type ValidationReport } from './validator.js';
 
 export interface MemoryEntry {
   /** 记忆的显示名称，也是索引中的链接标题。 */
@@ -14,6 +16,10 @@ export interface MemoryEntry {
   content: string;
   /** 记忆文件在本地文件系统中的完整路径。 */
   filePath: string;
+  /** 最后写入时间 */
+  lastWriteAt?: number;
+  /** 最后读取时间 */
+  lastReadAt?: number;
 }
 
 // 保存所有记忆文件的目录名。
@@ -155,23 +161,13 @@ export class MemoryStore {
   }
 
   /**
-   * 按空白分隔查询词，在记忆名称、描述和正文中执行大小写不敏感搜索。
-   * 任意一个关键词命中即可保留该条目。
+   * 使用 bm25 查找符合条件的记忆目录
    * @param query 要搜索的文本。
+   * @param topK 获取的条数。
    * @returns 匹配的记忆条目。
    */
-  search(query: string): MemoryEntry[] {
-    // 先取得全部记忆，再在名称、描述和正文中进行匹配。
-    const all = this.list();
-    // 将查询拆成关键词；任意关键词命中即可返回该记忆。
-    const keywords = query.toLowerCase().split(/\s+/);
-    // entry：当前参与关键词匹配的记忆条目。
-    return all.filter(entry => {
-      // 合并可搜索字段并统一转为小写，实现大小写不敏感搜索。
-      const text = `${entry.name} ${entry.description} ${entry.content}`.toLowerCase();
-      // kw：当前待匹配的查询关键词。
-      return keywords.some(kw => text.includes(kw));
-    });
+  search(query: string, topK = 5): SearchHit[] {
+    return bm25Search(this.list(), query, topK);
   }
 
   /**
@@ -218,6 +214,10 @@ export class MemoryStore {
     return true;
   }
 
+  lint(): ValidationReport[] {
+    return lintAll(this.list(), this.baseDir);
+  }
+
   /**
    * 生成可注入 system prompt 的记忆区块，只包含索引和使用提示。
    * 具体记忆正文不会全部注入，模型需要通过 memory 工具按需读取。
@@ -233,15 +233,18 @@ export class MemoryStore {
       return '[记忆系统] 当前没有存储任何记忆。你可以使用 memory 工具来保存重要信息。';
     }
 
-    // 组织注入 system prompt 的记忆说明和索引内容。
     const lines = [
       `[记忆系统] 共 ${entries.length} 条记忆`,
       '',
       '记忆索引：',
       index,
       '',
-      '使用 memory 工具的 read 操作来读取具体记忆内容。',
-      '记忆是线索，不是事实——使用前先验证其准确性。',
+      '使用 memory 工具的 read 操作来读取具体记忆内容；用 search 做 BM25 搜索；用 lint 检查记忆库健康度。',
+      '',
+      '记忆使用原则：',
+      '- 记忆是线索，不是事实——使用前先用工具验证（read_file、grep 确认路径和内容是否还存在）',
+      '- 不存代码能推导的（技术栈、目录结构）、git 能查的（谁改了什么）、文档已经写了的',
+      '- 只存对话中出现的、其他地方推导不出来的信息（用户偏好、纠正反馈、项目决策、外部资源）',
     ];
     return lines.join('\n');
   }

@@ -11,6 +11,7 @@ import { agentLoop } from './agent/agent-loop'
 import { createDispatcher, type CommandContext } from './commands'
 import { contextCommands } from './commands/context'
 import { debugCommands } from './commands/debug'
+import { dreamCommands } from './commands/dream'
 import { memoryCommands } from './commands/memory'
 import { ragCommands } from './commands/rag'
 import { estimateMessageTokens } from './context/defense'
@@ -107,7 +108,8 @@ const dispatch = createDispatcher([
   ...debugCommands,
   ...contextCommands,
   ...memoryCommands,
-  ...ragCommands
+  ...ragCommands,
+  ...dreamCommands
 ]);
 
 /**

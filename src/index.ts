@@ -14,6 +14,7 @@ import { debugCommands } from './commands/debug'
 import { dreamCommands } from './commands/dream'
 import { memoryCommands } from './commands/memory'
 import { ragCommands } from './commands/rag'
+import { createSkillCommands } from './commands/skill'
 import { estimateMessageTokens } from './context/defense'
 import {
   PromptBuilder, coreRules,
@@ -21,6 +22,7 @@ import {
   toolGuide,
   type PromptContext,
 } from './context/prompt-builder.js'
+import { memoryContext, ragContext } from './context/prompt-pipes'
 import { connectMCP } from './mcp'
 import { MemoryStore } from './memory/store'
 import { createMockModel } from './mock-model'
@@ -28,6 +30,7 @@ import { chunkDocument } from './rag/chunker'
 import { createDashScopeEmbedder, createMockEmbedder, embed } from './rag/embedder'
 import { SqliteVectorStore } from './rag/sqlite-store.js'
 import { SessionStore } from './session/store'
+import { SkillLoader } from './skills/loader'
 import { allTools } from './tools'
 import { createMemoryTool } from './tools/memory-tools'
 import { createRagTools } from './tools/rag-tools'
@@ -101,7 +104,12 @@ const memoryStore = new MemoryStore('.')
 memoryStore.init();
 registry.register(createMemoryTool(memoryStore));
 
-// ———— 注册命令 ——————————————————————————————
+// ———— Skills ——————————————————————————————
+const skillLoader = new SkillLoader('.');
+const loadedSkills = skillLoader.load();
+const activeSkills = new Set<string>();
+
+// ———— Commands ——————————————————————————————
 // 命令按数组顺序尝试匹配；因此更具体的命令处理器应放在更通用的处理器之前。
 
 const dispatch = createDispatcher([
@@ -109,7 +117,8 @@ const dispatch = createDispatcher([
   ...contextCommands,
   ...memoryCommands,
   ...ragCommands,
-  ...dreamCommands
+  ...dreamCommands,
+  ...createSkillCommands(skillLoader, activeSkills)
 ]);
 
 /**
@@ -144,9 +153,10 @@ async function main() {
     .pipe('coreRules', coreRules())
     .pipe('toolGuide', toolGuide())
     .pipe('deferredTools', deferredTools())
-    .pipe('memoryContext', () => memoryStore.buildPromptSection())
+    .pipe('memoryContext', memoryContext(memoryStore))
+    .pipe('ragContext', ragContext(vectorStore))
+    .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
     .pipe('sessionContext', sessionContext());
-
 
   // node readline 模块
   // 创建一个命令行交互对象，让程序可以从中断读取用户输入，并把提示活输出显示到终端
@@ -215,16 +225,23 @@ async function main() {
     })
   }
 
-  console.log('Super Agent v0.13 — Memory Maintenance (type "exit" to quit)');
+  console.log('Super Agent v0.14 — Skills (type "exit" to quit)');
   console.log('快捷命令：');
-  console.log('  ingest <path>   — 导入文档到知识库');
-  console.log('  /rag            — 查看知识库状态');
-  console.log('  /memory         — 查看记忆（带 ⚠️ 标记）');
+  console.log('  /skill          — 查看可用的 skills');
+  console.log('  /skill load X   — 激活一个 skill');
+  console.log('  /code-review    — 直接激活并执行 code-review skill');
+  console.log('  /memory         — 查看记忆');
   console.log('  /lint           — 扫描记忆库');
-  console.log('  /dream          — 记忆整理（lint → 清理 → 合并 → 报告）');
+  console.log('  /dream          — 记忆整理');
   console.log('  /context        — context 占用矩阵');
   console.log('  status          — 当前状态');
   console.log('');
+
+  if (loadedSkills.length > 0) {
+    console.log(`  发现 ${loadedSkills.length} 个 skill：`);
+    for (const s of loadedSkills) console.log(`    /${s.name} — ${s.description}`);
+    console.log('');
+  }
 
   // 仅在知识库为空时执行首次自动导入，避免每次启动重复写入 sqlite-vec。
   if (vectorStore.size() === 0 && fs.existsSync('docs')) {

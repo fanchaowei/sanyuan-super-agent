@@ -49,6 +49,11 @@ export class ToolRegistry {
     }
   }
 
+  unregister(name: string): boolean {
+    this.discoveredTools.delete(name);
+    return this.tools.delete(name);
+  }
+
   get(name: string): ToolDefinition | undefined {
     return this.tools.get(name);
   }

@@ -13,6 +13,7 @@ import { contextCommands } from './commands/context'
 import { debugCommands } from './commands/debug'
 import { dreamCommands } from './commands/dream'
 import { memoryCommands } from './commands/memory'
+import { createPluginCommands } from './commands/plugin'
 import { ragCommands } from './commands/rag'
 import { createSkillCommands } from './commands/skill'
 import { estimateMessageTokens } from './context/defense'
@@ -26,6 +27,9 @@ import { memoryContext, ragContext } from './context/prompt-pipes'
 import { connectMCP } from './mcp'
 import { MemoryStore } from './memory/store'
 import { createMockModel } from './mock-model'
+import { PluginManager } from './plugins/manager.js'
+import { supabasePlugin } from './plugins/supabase-plugin'
+import type { PluginDefinition } from './plugins/types'
 import { chunkDocument } from './rag/chunker'
 import { createDashScopeEmbedder, createMockEmbedder, embed } from './rag/embedder'
 import { SqliteVectorStore } from './rag/sqlite-store.js'
@@ -109,6 +113,25 @@ const skillLoader = new SkillLoader('.');
 const loadedSkills = skillLoader.load();
 const activeSkills = new Set<string>();
 
+// ———— Plugins ——————————————————————————————
+const pluginManager = new PluginManager(registry);
+const availablePlugins = new Map<string, PluginDefinition>([
+  ['supabase', supabasePlugin],
+]);
+
+const countPluginTools = async () => {
+  // 启动时自动加载插件
+  console.log('  加载插件...');
+  for (const [name, def] of availablePlugins) {
+    try {
+      const tools = await pluginManager.load(def);
+      console.log(`  ✓ ${name} — ${tools.length} 个工具`);
+    } catch {
+      console.log(`  ✗ ${name} — 加载失败`);
+    }
+  }
+}
+
 // ———— Commands ——————————————————————————————
 // 命令按数组顺序尝试匹配；因此更具体的命令处理器应放在更通用的处理器之前。
 
@@ -118,7 +141,8 @@ const dispatch = createDispatcher([
   ...memoryCommands,
   ...ragCommands,
   ...dreamCommands,
-  ...createSkillCommands(skillLoader, activeSkills)
+  ...createSkillCommands(skillLoader, activeSkills),
+  ...createPluginCommands(pluginManager, availablePlugins),
 ]);
 
 /**
@@ -128,9 +152,8 @@ async function main() {
   // 先连接真实或 Mock MCP，使后续工具统计和模型调用能拿到完整的工具集合。
   await connectMCP(registry)
 
-  // 注册额外的模拟 MCP 工具，用于演示工具定义过多带来的上下文膨胀。
-  // const simCount = registerSimulatedTools(registry);
-  // console.log(`  已注册 ${simCount} 个模拟 MCP 工具（Notion/Browser/Supabase）`);
+  // 启动时自动加载插件
+  await countPluginTools()
 
   // 输出活跃工具、延迟工具及其 Schema 大致占用的 token。
   countTools()
@@ -182,6 +205,7 @@ async function main() {
       const trimmed = input.trim()
       if (!trimmed || trimmed === 'exit') {
         console.log('Bye!')
+        await pluginManager.unloadAll();
         rl.close()
         return
       }
@@ -225,17 +249,25 @@ async function main() {
     })
   }
 
-  console.log('Super Agent v0.14 — Skills (type "exit" to quit)');
+  console.log('Super Agent v0.15 — Plugins (type "exit" to quit)');
   console.log('快捷命令：');
-  console.log('  /skill          — 查看可用的 skills');
-  console.log('  /skill load X   — 激活一个 skill');
-  console.log('  /code-review    — 直接激活并执行 code-review skill');
-  console.log('  /memory         — 查看记忆');
-  console.log('  /lint           — 扫描记忆库');
-  console.log('  /dream          — 记忆整理');
-  console.log('  /context        — context 占用矩阵');
-  console.log('  status          — 当前状态');
+  console.log('  /plugin          — 查看插件状态');
+  console.log('  /plugin load X   — 加载插件');
+  console.log('  /plugin unload X — 卸载插件');
+  console.log('  /skill           — 查看 skills');
+  console.log('  /memory          — 查看记忆');
+  console.log('  /context         — context 占用矩阵');
+  console.log('  status           — 当前状态');
   console.log('');
+
+  const pluginList = pluginManager.list();
+  if (pluginList.length > 0) {
+    console.log(`  已加载 ${pluginList.length} 个插件：`);
+    for (const p of pluginList) {
+      console.log(`    ${p.name} — ${p.tools.join(', ')}`);
+    }
+    console.log('');
+  }
 
   if (loadedSkills.length > 0) {
     console.log(`  发现 ${loadedSkills.length} 个 skill：`);

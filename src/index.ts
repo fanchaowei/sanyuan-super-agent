@@ -8,7 +8,10 @@ import 'dotenv/config'
 import fs from 'node:fs'
 import { createInterface } from 'node:readline'
 import { agentLoop } from './agent/agent-loop'
+import { FeishuChannel } from './channels/feishu'
+import { ChannelGateway } from './channels/gateway'
 import { createDispatcher, type CommandContext } from './commands'
+import { createChannelCommands } from './commands/channel.js'
 import { contextCommands } from './commands/context'
 import { debugCommands } from './commands/debug'
 import { dreamCommands } from './commands/dream'
@@ -132,6 +135,21 @@ const countPluginTools = async () => {
   }
 }
 
+// ———— Channel ——————————————————————————————
+const gateway = new ChannelGateway({
+  model,
+  registry,
+  buildSystem: () => builder.build(makePromptCtx()),
+});
+
+const FEISHU_PORT = Number(process.env.FEISHU_PORT || '3000');
+const feishuChannel = new FeishuChannel({
+  appId: process.env.FEISHU_APP_ID || '',
+  appSecret: process.env.FEISHU_APP_SECRET || '',
+  port: FEISHU_PORT,
+});
+gateway.register(feishuChannel);
+
 // ———— Commands ——————————————————————————————
 // 命令按数组顺序尝试匹配；因此更具体的命令处理器应放在更通用的处理器之前。
 
@@ -143,7 +161,30 @@ const dispatch = createDispatcher([
   ...dreamCommands,
   ...createSkillCommands(skillLoader, activeSkills),
   ...createPluginCommands(pluginManager, availablePlugins),
+  ...createChannelCommands(gateway)
 ]);
+
+// ———— Prompt Builder ——————————————————————————————
+
+// Prompt Pipe 只组装 system prompt；它不在 messages 中。
+const builder = new PromptBuilder()
+  .pipe('coreRules', coreRules())
+  .pipe('toolGuide', toolGuide())
+  .pipe('deferredTools', deferredTools())
+  .pipe('memoryContext', memoryContext(memoryStore))
+  .pipe('ragContext', ragContext(vectorStore))
+  .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
+  .pipe('sessionContext', sessionContext());
+
+// 每次构建 prompt 前重新计算上下文，确保工具数量和消息数量反映最新状态。
+function makePromptCtx(): PromptContext {
+  return {
+    toolCount: registry.getActiveTools().length,
+    deferredToolSummary: registry.getDeferredToolSummary(),
+    sessionMessageCount: 0,
+    sessionId: 'default',
+  };
+}
 
 /**
  * 程序入口：完成工具与会话初始化，然后启动命令行对话循环。
@@ -171,15 +212,6 @@ async function main() {
 
   const tracker = new UsageTracker('.usage/today.jsonl');
 
-  // Prompt Pipe 只组装 system prompt；它不在 messages 中。
-  const builder = new PromptBuilder()
-    .pipe('coreRules', coreRules())
-    .pipe('toolGuide', toolGuide())
-    .pipe('deferredTools', deferredTools())
-    .pipe('memoryContext', memoryContext(memoryStore))
-    .pipe('ragContext', ragContext(vectorStore))
-    .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
-    .pipe('sessionContext', sessionContext());
 
   // node readline 模块
   // 创建一个命令行交互对象，让程序可以从中断读取用户输入，并把提示活输出显示到终端
@@ -188,15 +220,6 @@ async function main() {
     output: process.stdout, // 标准输出，终端显示
   })
 
-  // 每次构建 prompt 前重新计算上下文，确保工具数量和消息数量反映最新状态。
-  function makePromptCtx(): PromptContext {
-    return {
-      toolCount: registry.getActiveTools().length,
-      deferredToolSummary: registry.getDeferredToolSummary(),
-      sessionMessageCount: messages.length,
-      sessionId: sessionId,
-    };
-  }
 
   // 递归安排下一次 readline 提问，形成串行交互：上一轮 agentLoop 完成后才接收下一轮输入。
   function ask() {

@@ -15,7 +15,7 @@ export async function agentLoop(
   registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
-  tracker: UsageTracker
+  tracker?: UsageTracker
 ) {
   let step = 0;
   let totalTokens = 0;

@@ -1,3 +1,4 @@
+import type { ChannelDefinition } from '../channels/types.js';
 import type { ToolDefinition } from '../tools/tool-registry.js';
 
 /**
@@ -20,6 +21,12 @@ export interface PluginApi {
    * @param tools 要注册的工具定义数组
    */
   registerTools(tools: ToolDefinition[]): void;
+
+  /**
+   * 想宿主系统注册一个 channel
+   * @param channel 要注册的符合 ChannelDefinition 格式的 channel 数据
+   */
+  registerChannel(channel: ChannelDefinition): void;  // 新增
 
   /**
    * 获取解析后的插件配置（包含环境变量解析与覆盖后的配置项）

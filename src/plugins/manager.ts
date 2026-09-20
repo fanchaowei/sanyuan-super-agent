@@ -1,3 +1,4 @@
+import type { ChannelDefinition } from '../channels/types.js';
 import type { ToolDefinition, ToolRegistry } from '../tools/tool-registry.js';
 import type { PluginApi, PluginConfig, PluginDefinition } from './types.js';
 
@@ -80,6 +81,9 @@ export class PluginManager {
           this.registry.register(prefixedTool);
           registeredTools.push(prefixedName);
         }
+      },
+      registerChannel: (channel: ChannelDefinition) => {
+        // TODO: 实现 channel 注册逻辑
       },
       getConfig: () => resolvedConfig,
       log: (message: string) => {

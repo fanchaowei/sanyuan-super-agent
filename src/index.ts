@@ -199,6 +199,10 @@ async function main() {
   // 输出活跃工具、延迟工具及其 Schema 大致占用的 token。
   countTools()
 
+  // 启动 Channel
+  console.log('  启动 Channel...');
+  await gateway.startAll();
+
   // messages 是对话的单一事实来源：用户输入先写入，agentLoop 产生的 assistant/tool
   // 消息再追加到同一个数组，随后统一持久化。
   let messages: ModelMessage[] = [];
@@ -228,6 +232,7 @@ async function main() {
       const trimmed = input.trim()
       if (!trimmed || trimmed === 'exit') {
         console.log('Bye!')
+        await gateway.stopAll();
         await pluginManager.unloadAll();
         rl.close()
         return
@@ -272,15 +277,16 @@ async function main() {
     })
   }
 
-  console.log('Super Agent v0.15 — Plugins (type "exit" to quit)');
+  console.log('Super Agent v0.16 — Channel (type "exit" to quit)');
   console.log('快捷命令：');
-  console.log('  /plugin          — 查看插件状态');
-  console.log('  /plugin load X   — 加载插件');
-  console.log('  /plugin unload X — 卸载插件');
+  console.log('  /channel         — 查看通道状态');
+  console.log('  /plugin          — 查看插件');
   console.log('  /skill           — 查看 skills');
   console.log('  /memory          — 查看记忆');
   console.log('  /context         — context 占用矩阵');
-  console.log('  status           — 当前状态');
+  console.log('');
+  console.log(`  Dashboard: http://localhost:${FEISHU_PORT}`);
+  console.log('  打开浏览器发送测试消息，或在终端直接对话');
   console.log('');
 
   const pluginList = pluginManager.list();

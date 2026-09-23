@@ -16,6 +16,10 @@
  */
 import { jsonSchema } from 'ai';
 import type { MCPClient, MockMCPClient } from '../mcp/mcp-client';
+import { classifyBashCommand } from '../security/bash-classifier';
+import { HookPipeline } from '../security/hooks';
+import { canUseTool } from '../security/roles';
+import type { Role } from '../security/roles.js';
 
 export interface ToolDefinition {
   name: string;
@@ -43,6 +47,11 @@ export class ToolRegistry {
   // 已发现的延迟工具的列表
   private discoveredTools = new Set<string>();
 
+  // 当前的用户权限
+  private currentRole: Role = 'owner';
+  // 工具处理的 hooks
+  private hookPipeline?: HookPipeline;
+
   register(...tools: ToolDefinition[]): void {
     for (const tool of tools) {
       this.tools.set(tool.name, tool);
@@ -52,6 +61,22 @@ export class ToolRegistry {
   unregister(name: string): boolean {
     this.discoveredTools.delete(name);
     return this.tools.delete(name);
+  }
+
+  setRole(role: Role): void {
+    this.currentRole = role;
+  }
+
+  getRole(): Role {
+    return this.currentRole;
+  }
+
+  setHookPipeline(pipeline: HookPipeline): void {
+    this.hookPipeline = pipeline;
+  }
+
+  markDiscovered(name: string): void {
+    this.discoveredTools.add(name);
   }
 
   get(name: string): ToolDefinition | undefined {
@@ -155,10 +180,35 @@ export class ToolRegistry {
       const isSafe = tool.isConcurrencySafe === true;
       const registry = this;
 
+      const hookPipeline = registry.hookPipeline;
+      const toolName = tool.name;
+
       result[tool.name] = {
         description: tool.description,
         inputSchema: jsonSchema(tool.parameters as any),
         execute: async (input: any) => {
+
+          // Bash 风险检测
+          if (toolName === 'bash' && input?.command) {
+            const risk = classifyBashCommand(input.command);
+            if (risk.level === 'dangerous') {
+              return `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${input.command}`;
+            }
+            if (risk.level === 'moderate') {
+              console.log(`  [安全] ⚠ ${risk.reason}: ${input.command}`);
+            }
+          }
+          // Pre Hook
+          if (hookPipeline) {
+            const preResult = await hookPipeline.runPre(toolName, input);
+            if (preResult.action === 'block') {
+              return `[Hook 拦截] ${preResult.reason || '操作被阻止'}`;
+            }
+            if (preResult.action === 'modify' && preResult.modifiedInput !== undefined) {
+              input = preResult.modifiedInput;
+            }
+          }
+
           // 在真正执行前先按 isConcurrencySafe 获取锁
           if (isSafe) {
             await registry.acquireConcurrent();
@@ -170,7 +220,18 @@ export class ToolRegistry {
           try {
             const raw = await executeFn(input);
             const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-            return truncateResult(text, maxChars);
+            let output = truncateResult(text, maxChars);
+
+            // Post Hook
+            if (hookPipeline) {
+              const postResult = await hookPipeline.runPost(toolName, input, output);
+              if (postResult.modifiedOutput !== undefined) {
+                output = String(postResult.modifiedOutput);
+              }
+            }
+
+            return output
+
           } finally {
             // 不管成功还是抛异常，锁都要释放
             if (isSafe) {
@@ -205,6 +266,10 @@ export class ToolRegistry {
   getActiveTools(): ToolDefinition[] {
     return this.getAll().filter(tool => {
       if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        return false;
+      }
+      if (!canUseTool(this.currentRole, tool.name)) {
+        // 根据用户权限筛选工具，背筛选的工具不暴露给 LLM
         return false;
       }
       return true;

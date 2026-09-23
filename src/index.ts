@@ -18,6 +18,7 @@ import { dreamCommands } from './commands/dream'
 import { memoryCommands } from './commands/memory'
 import { createPluginCommands } from './commands/plugin'
 import { ragCommands } from './commands/rag'
+import { createSecurityCommands } from './commands/security.js'
 import { createSkillCommands } from './commands/skill'
 import { estimateMessageTokens } from './context/defense'
 import {
@@ -29,6 +30,7 @@ import {
 import { memoryContext, ragContext } from './context/prompt-pipes'
 import { connectMCP } from './mcp'
 import { MemoryStore } from './memory/store'
+import { registerMockSecurityHook } from './mock'
 import { createMockModel } from './mock-model'
 import { PluginManager } from './plugins/manager.js'
 import { supabasePlugin } from './plugins/supabase-plugin'
@@ -36,6 +38,7 @@ import type { PluginDefinition } from './plugins/types'
 import { chunkDocument } from './rag/chunker'
 import { createDashScopeEmbedder, createMockEmbedder, embed } from './rag/embedder'
 import { SqliteVectorStore } from './rag/sqlite-store.js'
+import { HookPipeline } from './security/hooks.js'
 import { SessionStore } from './session/store'
 import { SkillLoader } from './skills/loader'
 import { allTools } from './tools'
@@ -135,6 +138,15 @@ const countPluginTools = async () => {
   }
 }
 
+// ———— Security: Hook Pipeline ——————————————————————————————
+
+const hookPipeline = new HookPipeline();
+
+// 注册模拟的 hook
+registerMockSecurityHook(hookPipeline)
+
+registry.setHookPipeline(hookPipeline);
+
 // ———— Channel ——————————————————————————————
 const gateway = new ChannelGateway({
   model,
@@ -161,7 +173,8 @@ const dispatch = createDispatcher([
   ...dreamCommands,
   ...createSkillCommands(skillLoader, activeSkills),
   ...createPluginCommands(pluginManager, availablePlugins),
-  ...createChannelCommands(gateway)
+  ...createChannelCommands(gateway),
+  ...createSecurityCommands(registry, hookPipeline)
 ]);
 
 // ———— Prompt Builder ——————————————————————————————
@@ -277,16 +290,26 @@ async function main() {
     })
   }
 
-  console.log('Super Agent v0.16 — Channel (type "exit" to quit)');
+  const role = registry.getRole();
+  const toolCount = registry.getActiveTools().length;
+  const hooks = hookPipeline.list();
+
+  console.log('Super Agent v0.17 — Permissions & Hooks (type "exit" to quit)');
   console.log('快捷命令：');
-  console.log('  /channel         — 查看通道状态');
-  console.log('  /plugin          — 查看插件');
-  console.log('  /skill           — 查看 skills');
-  console.log('  /memory          — 查看记忆');
-  console.log('  /context         — context 占用矩阵');
+  console.log('  /role [角色]      — 查看/切换角色 (owner|collaborator|guest)');
+  console.log('  /hooks            — 查看 Hook 管线');
+  console.log('  /channel          — 查看通道');
+  console.log('  /plugin           — 查看插件');
+  console.log('  /skill            — 查看 skills');
+  console.log('  /memory           — 查看记忆');
   console.log('');
-  console.log(`  Dashboard: http://localhost:${FEISHU_PORT}`);
-  console.log('  打开浏览器发送测试消息，或在终端直接对话');
+  console.log(`  当前角色: ${role}，可用工具: ${toolCount} 个`);
+  console.log(`  Hook: ${hooks.pre.length} 个 pre + ${hooks.post.length} 个 post`);
+  console.log('');
+  console.log('  试试：');
+  console.log('    /role guest        — 切换到 guest，bash 等工具被禁用');
+  console.log('    测试bash           — 执行 echo，会触发 post hook 加时间戳');
+  console.log('    测试危险命令        — 模型尝试 rm -rf，会被 bash classifier 拦截');
   console.log('');
 
   const pluginList = pluginManager.list();

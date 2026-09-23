@@ -1,0 +1,6 @@
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  protobufjs: set this to true or false
+minimumReleaseAgeExclude:
+  - hono@4.13.8

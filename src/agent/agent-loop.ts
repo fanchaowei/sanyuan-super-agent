@@ -15,7 +15,8 @@ export async function agentLoop(
   registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
-  tracker?: UsageTracker
+  tracker?: UsageTracker,
+  signal?: AbortSignal // 接收传入的 signal 取消信号
 ) {
   let step = 0;
   let totalTokens = 0;
@@ -47,7 +48,7 @@ export async function agentLoop(
         // 关闭 SDK 内置重试，统一由下面的 catch 按项目策略处理重试和退避。
         // result 同时提供实时事件流，以及流结束后可读取的完整响应和用量统计。
         const result = streamText({
-          model, system, tools: registry.toAISDKFormat(), messages, maxRetries: 0,
+          model, system, tools: registry.toAISDKFormat(), messages, maxRetries: 0, abortSignal: signal,
           // 允许模型在同一响应中并行提出多个工具调用（由 SDK/provider 执行）。
           providerOptions: { openai: { parallelToolCalls: true } }, onError: () => { }
         });

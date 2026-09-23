@@ -1,0 +1,11 @@
+{"jobId":"quote-task-001","startedAt":"2026-09-23T07:06:40.661Z","finishedAt":"2026-09-23T07:06:41.599Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T07:07:37.977Z","finishedAt":"2026-09-23T07:07:38.993Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T07:08:08.996Z","finishedAt":"2026-09-23T07:08:09.927Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T07:08:39.932Z","finishedAt":"2026-09-23T07:08:41.041Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T07:09:11.043Z","finishedAt":"2026-09-23T07:09:11.968Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T08:22:18.975Z","finishedAt":"2026-09-23T08:22:20.017Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T08:22:50.033Z","finishedAt":"2026-09-23T08:22:51.372Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T08:23:21.388Z","finishedAt":"2026-09-23T08:23:22.417Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"quote-task-001","startedAt":"2026-09-23T08:23:52.431Z","finishedAt":"2026-09-23T08:23:53.311Z","status":"success","output":"山再高，往上攀，总能登顶；路再长，走下去，定能到达。"}
+{"jobId":"ai-agent-tip-001","startedAt":"2026-09-23T08:24:56.758Z","finishedAt":"2026-09-23T08:24:59.394Z","status":"success","output":"工具调用不是万能的——每个工具调用都有延迟和失败风险。工程实践中，应优先使用本地计算（如 grep、bash、glob）完成可推导任务；仅当必须访问外部状态（如 GitHub issue、数据库、天气）时才调用远程工具。\n\n✅ 实践口诀：  \n- 能 `grep` 就别 `web_search`  \n- 能 `bash` 就别 `supabase__query`  \n- 能 `read_file` 就别 `mcp__github__get_file_contents`\n\n这是降低响应延迟、提升系统可靠性的最简单有效原则。"}
+{"jobId":"ai-agent-tip-001","startedAt":"2026-09-23T08:25:19.398Z","finishedAt":"2026-09-23T08:25:21.286Z","status":"success","output":"工具调用不是“尽力而为”，而是**契约式执行**：每个工具都有明确的输入约束（如 `path` 必须存在、`old_string` 必须精确匹配），违反即失败。工程实践中，应先用 `read_file` 或 `grep` 验证前提，再调用 `edit_file` —— 这比 try-catch 更可靠。"}

@@ -1,0 +1,28 @@
+{
+  "jobs": [
+    {
+      "id": "quote-task-001",
+      "name": "quote-generator",
+      "schedule": "every 30s",
+      "scheduleType": "interval",
+      "enabled": false,
+      "payload": {
+        "type": "agent",
+        "prompt": "输出一句励志名言"
+      },
+      "source": "runtime"
+    },
+    {
+      "id": "ai-agent-tip-001",
+      "name": "ai-agent-tip",
+      "schedule": "every 20s",
+      "scheduleType": "interval",
+      "enabled": false,
+      "payload": {
+        "type": "agent",
+        "prompt": "返回一个 AI agent 开发的小知识点，简洁、实用、可直接用于工程实践。"
+      },
+      "source": "runtime"
+    }
+  ]
+}

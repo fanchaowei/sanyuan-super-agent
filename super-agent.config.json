@@ -1,0 +1,51 @@
+{
+  "version": "1.0",
+  "model": {
+    "provider": "dashscope",
+    "name": "qwen-turbo-latest",
+    "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "apiKey": "${DASHSCOPE_API_KEY}"
+  },
+  "plugins": [
+    {
+      "name": "supabase",
+      "enabled": false,
+      "config": {}
+    }
+  ],
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "appId": "cli_aa2582b88db81cc6",
+      "appSecret": "lPbN1nrMy8sjEBDBKzOowh6O7Gem1deD",
+      "port": 3000
+    }
+  },
+  "agents": {
+    "maxSpawnDepth": 1,
+    "maxConcurrent": 3,
+    "defaultTimeout": 60000
+  },
+  "security": {
+    "defaultRole": "developer",
+    "auditLog": true,
+    "bashTimestamp": true
+  },
+  "memory": {
+    "dataDir": "."
+  },
+  "rag": {
+    "enabled": true,
+    "docsDir": "docs"
+  },
+  "cron": {
+    "enabled": true,
+    "dataDir": "."
+  },
+  "session": {
+    "id": "default"
+  },
+  "usage": {
+    "trackingFile": ".usage/today.jsonl"
+  }
+}

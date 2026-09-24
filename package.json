@@ -4,23 +4,39 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "super-agent": "src/index.ts"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "start:self": "tsx src/self/index.ts"
+    "start:init": "tsx src/index.ts init",
+    "continue": "tsx src/index.ts --continue"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.24.0",
+  "packageManager": "pnpm@12.4.2",
   "dependencies": {
     "@ai-sdk/openai": "^3.0.63",
+    "@hono/node-server": "^2.1.1",
+    "@larksuiteoapi/node-sdk": "^1.74.0",
+    "@modelcontextprotocol/client": "2.0.0-beta.3",
     "ai": "^6.0.182",
-    "dotenv": "^17.4.2"
+    "better-sqlite3": "^13.0.3",
+    "croner": "^10.0.1",
+    "dotenv": "^17.4.2",
+    "fast-glob": "^3.3.3",
+    "hono": "^4.13.8",
+    "sqlite-vec": "^0.1.9",
+    "turndown": "^7.2.4",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^25.8.0",
+    "@types/turndown": "^5.0.6",
     "tsx": "^4.22.0",
     "typescript": "^6.0.3"
   }

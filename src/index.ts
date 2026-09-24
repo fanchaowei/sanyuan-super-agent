@@ -11,6 +11,7 @@ import { agentLoop } from './agent/agent-loop'
 import { FeishuChannel } from './channels/feishu'
 import { ChannelGateway } from './channels/gateway'
 import { createDispatcher, type CommandContext } from './commands'
+import { createAgentCommands } from './commands/agents'
 import { createChannelCommands } from './commands/channel.js'
 import { contextCommands } from './commands/context'
 import { createCronCommands } from './commands/cron'
@@ -43,10 +44,13 @@ import { SqliteVectorStore } from './rag/sqlite-store.js'
 import { HookPipeline } from './security/hooks.js'
 import { SessionStore } from './session/store'
 import { SkillLoader } from './skills/loader'
+import { SubAgentRegistry } from './sub-agents/registry'
+import { SpawnContext } from './sub-agents/spawn'
 import { allTools } from './tools'
 import { createCronTool } from './tools/cron-tools'
 import { createMemoryTool } from './tools/memory-tools'
 import { createRagTools } from './tools/rag-tools'
+import { createSpawnTool } from './tools/spawn-tools'
 import { ToolRegistry } from './tools/tool-registry'
 import { createToolSearchTool } from './tools/tool-search'
 import { UsageTracker } from './usage/tracker'
@@ -193,6 +197,21 @@ const setCronServiceExecutor = (cronService: CronService) => {
   });
 }
 
+// ── Sub-Agent ────────────────────────────────────────
+const agentRegistry = new SubAgentRegistry({ maxSpawnDepth: 1, maxConcurrent: 3 });
+
+function getSpawnCtx(): SpawnContext {
+  return {
+    model,
+    registry,
+    agentRegistry,
+    buildSystem: () => builder.build(makePromptCtx()),
+    currentDepth: 0,
+  };
+}
+
+registry.register(createSpawnTool(agentRegistry, getSpawnCtx));
+
 // ———— Commands ——————————————————————————————
 // 命令按数组顺序尝试匹配；因此更具体的命令处理器应放在更通用的处理器之前。
 
@@ -206,7 +225,8 @@ const dispatch = createDispatcher([
   ...createPluginCommands(pluginManager, availablePlugins),
   ...createChannelCommands(gateway),
   ...createSecurityCommands(registry, hookPipeline),
-  ...createCronCommands(cronService)
+  ...createCronCommands(cronService),
+  ...createAgentCommands(agentRegistry),
 ]);
 
 // ———— Prompt Builder ——————————————————————————————
@@ -334,21 +354,18 @@ async function main() {
   const toolCount = registry.getActiveTools().length;
   const hooks = hookPipeline.list();
 
-  console.log('Super Agent v0.18 — Cron 定时任务 (type "exit" to quit)');
+  console.log('Super Agent v0.19 — Sub-Agent (type "exit" to quit)');
   console.log('快捷命令：');
+  console.log('  /agents           — 查看子 Agent 记录');
   console.log('  /cron             — 查看定时任务');
-  console.log('  /cron logs        — 查看执行记录');
   console.log('  /role [角色]      — 查看/切换角色');
-  console.log('  /hooks            — 查看 Hook 管线');
   console.log('');
   console.log(`  当前角色: ${role}，可用工具: ${toolCount} 个`);
-  console.log(`  Hook: ${hooks.pre.length} 个 pre + ${hooks.post.length} 个 post`);
-  console.log(`  Cron: ${cronJobs.length} 个定时任务`);
+  console.log(`  Sub-Agent: 最大深度 ${agentRegistry.getConfig().maxSpawnDepth}，最大并发 ${agentRegistry.getConfig().maxConcurrent}`);
   console.log('');
   console.log('  试试：');
-  console.log('    让 Agent 创建一个每 30 秒执行的定时任务');
-  console.log('    /cron         — 查看当前任务列表');
-  console.log('    /cron logs    — 查看执行记录');
+  console.log('    帮我对比 Hono、Fastify 和 Express 的性能和生态');
+  console.log('    /agents       — 查看子 Agent 执行记录');
   console.log('');
 
   const pluginList = pluginManager.list();

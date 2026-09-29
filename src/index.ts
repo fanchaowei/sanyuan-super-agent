@@ -1,63 +1,23 @@
-import { createOpenAI } from '@ai-sdk/openai'
-import { streamText, type ModelMessage } from 'ai'
-import 'dotenv/config'
-import { createInterface } from 'node:readline'
-import { createMockModel } from './mock-model'
+/**
+ * SuperAgent 命令行主入口 (CLI Entry Point)
+ *
+ * 【作用】
+ * 作为 npm/pnpm 启动或全局命令执行时的首要入口脚本。
+ * 负责解析命令行入参，根据子命令路由至不同的执行流程（如初始化向导或主 Agent 会话运行）。
+ *
+ * 【具体执行流程】
+ * 1. 从 process.argv 中获取传入的第一个参数作为子命令 command。
+ * 2. 若 command 为 "init"：动态导入并执行配置向导 runInit()，引导用户交互式生成配置文件。
+ * 3. 否则（默认）：动态导入并执行 startAgent() 启动 SuperAgent 主运行循环。
+ */
 
-const qwen = createOpenAI({
-  baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  apiKey: process.env.DASHSCOPE_API_KEY,
-})
+/** 命令行子命令参数（如 "init" 等） */
+const command: string | undefined = process.argv[2];
 
-const model: any = process.env.DASHSCOPE_API_KEY
-  ? qwen.chat('qwen-plus-latest')
-  : createMockModel()
-
-// node readline 模块
-// 创建一个命令行交互对象，让程序可以从中断读取用户输入，并把提示活输出显示到终端
-const rl = createInterface({
-  input: process.stdin, // 标准输入，键盘输入
-  output: process.stdout, // 标准输出，终端显示
-})
-
-// 对话历史，包含 role 和 content
-const messages: ModelMessage[] = []
-
-function ask() {
-  // 提问并等待用户输入
-  rl.question('\nYou: ', async (input) => {
-    const trimmed = input.trim()
-    if (!trimmed || trimmed === 'exit') {
-      console.log('Bye!')
-      rl.close()
-      return
-    }
-
-    // 将用户本次的输入加入到 message
-    messages.push({ role: 'user', content: trimmed })
-
-    const result = streamText({
-      model,
-      // 定义它的行为风格
-      system: `你是 Super Agent，一个专注于软件开发的 AI 助手。
-你说话简洁直接，喜欢用代码示例来解释问题。
-如果用户的问题不够清晰，你会反问而不是瞎猜。`,
-      messages,
-    })
-
-    process.stdout.write('Assistant: ')
-    let fullResponse = ''
-    for await (const chunk of result.textStream) {
-      process.stdout.write(chunk)
-      fullResponse += chunk
-    }
-    console.log() // 换行
-
-    messages.push({ role: 'assistant', content: fullResponse })
-
-    ask()
-  })
+if (command === "init") {
+  // 执行初始化配置向导
+  import("./config/init.js").then((m) => m.runInit());
+} else {
+  // 启动主 Agent 对话和调度系统
+  import("./main.js").then((m) => m.startAgent().catch(console.error));
 }
-
-console.log('Super Agent v0.1 (type "exit" to quit)\n')
-ask()

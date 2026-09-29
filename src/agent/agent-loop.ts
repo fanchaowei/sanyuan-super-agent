@@ -1,5 +1,6 @@
 import { streamText, type ModelMessage } from 'ai';
 import { ToolRegistry } from '../tools/tool-registry.js';
+import { LocalTraceRecorder } from '../trace/recorder.js';
 import { normalizeUsage, type UsageTracker } from '../usage/tracker.js';
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js';
 import { calculateDelay, isRetryable, sleep } from './retry.js';
@@ -16,7 +17,8 @@ export async function agentLoop(
   messages: ModelMessage[],
   system: string,
   tracker?: UsageTracker,
-  signal?: AbortSignal // 接收传入的 signal 取消信号
+  signal?: AbortSignal, // 接收传入的 signal 取消信号
+  trace?: LocalTraceRecorder // 日志记录，记录每轮 agent 循环的内容，用于排查错误
 ) {
   let step = 0;
   let totalTokens = 0;
@@ -27,6 +29,9 @@ export async function agentLoop(
   while (step < MAX_STEPS) {
     step++;
     console.log(`\n--- Step ${step} ---`);
+
+    // 记录当前步骤开始前的内容
+    await trace?.recordStepStarted({ step, system, messages });
 
     // 标记本轮响应是否请求过工具；没有工具调用意味着模型通常已经给出最终答案。
     let hasToolCall = false;
@@ -50,7 +55,9 @@ export async function agentLoop(
         const result = streamText({
           model, system, tools: registry.toAISDKFormat(), messages, maxRetries: 0, abortSignal: signal,
           // 允许模型在同一响应中并行提出多个工具调用（由 SDK/provider 执行）。
-          providerOptions: { openai: { parallelToolCalls: true } }, onError: () => { }
+          providerOptions: { openai: { parallelToolCalls: true } }, onError: ({ error }) => {
+            console.error('  [Stream Error]', error)
+          }
         });
 
         // fullStream 按事件顺序产出文本、工具调用和工具结果，适合边生成边处理。
@@ -91,13 +98,14 @@ export async function agentLoop(
               break;
             }
 
-            case 'tool-result':
+            case 'tool-result': {
               console.log(`  [结果: ${JSON.stringify(part.output)}]`);
               if (lastToolCall) {
                 // 将工具结果和对应调用配对记录，供后续循环检测判断是否反复失败。
                 recordResult(lastToolCall.name, lastToolCall.input, part.output);
               }
               break;
+            }
           }
         }
 
@@ -106,6 +114,7 @@ export async function agentLoop(
         stepUsage = await result.usage;
         break;
       } catch (error) {
+        await trace?.recordAttemptError(step, attempt, error);
         // API 容错：只对可恢复错误重试，例如限流、超时、临时网络问题等。
         // 如果超过最大次数，或者错误本身不可重试，就把错误抛给上层处理。
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error;
@@ -129,6 +138,14 @@ export async function agentLoop(
 
     // 把 usage 喂给 tracker；tracker 内部按四类 token 分别累加并算 cost
     const norm = normalizeUsage(stepUsage);
+
+    await trace?.recordStepCompleted({
+      step,
+      text: fullText,
+      outputMessages: stepResponse!.messages,
+      usage: norm,
+    });
+
     const stepRecord = tracker?.record(model?.modelId || 'mock-model', norm);
     totalTokens += norm.inputTokens + norm.outputTokens + norm.cacheReadTokens + norm.cacheWriteTokens;
 

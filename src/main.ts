@@ -56,6 +56,7 @@ import { createRagTools } from './tools/rag-tools'
 import { createSpawnTool } from './tools/spawn-tools'
 import { ToolRegistry } from './tools/tool-registry'
 import { createToolSearchTool } from './tools/tool-search'
+import { LocalTraceRecorder } from './trace/recorder.js'
 import { UsageTracker } from './usage/tracker'
 
 /**
@@ -70,6 +71,11 @@ function createModel(cfg: SuperAgentConfig['model']) {
   return provider.chat(cfg.name);
 }
 const model = createModel(config.model);
+
+// ———— Tracker ——————————————————————————————
+
+// 初始化模型 Token 用量计算
+const tracker = new UsageTracker('.usage/today.jsonl');
 
 // ———— Registry ——————————————————————————————
 // ToolRegistry 同时保存所有工具和当前“活跃”工具；后者会直接参与本轮 prompt，
@@ -167,10 +173,10 @@ registry.register(createCronTool(cronService));
 
 const setCronServiceExecutor = (cronService: CronService) => {
   cronService.setExecutor({
-    runAgentPrompt: async (prompt, timeout) => {
+    runAgentPrompt: async (prompt, timeout, signal) => {
       const cronMessages: ModelMessage[] = [{ role: 'user', content: prompt }];
       const system = builder.build(makePromptCtx());
-      await agentLoop(model, registry, cronMessages, system);
+      await agentLoop(model, registry, cronMessages, system, tracker, signal);
       const lastMsg = cronMessages[cronMessages.length - 1];
       if (!lastMsg) return '(无输出)';
       if (typeof lastMsg.content === 'string') return lastMsg.content;
@@ -277,7 +283,6 @@ export async function startAgent() {
   messages = session.messages;
   const { sessionId, store } = session;
 
-  const tracker = new UsageTracker('.usage/today.jsonl');
 
 
   // node readline 模块
@@ -328,7 +333,23 @@ export async function startAgent() {
 
       // 记住调用前的长度，agentLoop 返回后即可切出本轮新增的 assistant/tool 消息。
       const beforeLen = messages.length;
-      await agentLoop(model, registry, messages, currentSystem, tracker)
+
+      const trace = await LocalTraceRecorder.start({
+        sessionId: config.session.id,
+        model: model?.modelId || config.model.name,
+      });
+
+      try {
+        await agentLoop(model, registry, messages, currentSystem, tracker, undefined, trace)
+
+        await trace.finish('completed');
+        console.log(`  [Trace] ${trace.filePath}`);
+      } catch (error) {
+        await trace.finish('failed', error);
+        console.error(`  [Agent] ${error instanceof Error ? error.message : String(error)}`);
+        ask();
+        return;
+      }
 
       // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
       const newMessages = messages.slice(beforeLen);
@@ -345,7 +366,7 @@ export async function startAgent() {
   const toolCount = registry.getActiveTools().length;
   const hooks = hookPipeline.list();
 
-  console.log('Super Agent v0.19 — Sub-Agent (type "exit" to quit)');
+  console.log('Super Agent v1.0 (type "exit" to quit)');
   console.log('快捷命令：');
   console.log('  /agents           — 查看子 Agent 记录');
   console.log('  /cron             — 查看定时任务');

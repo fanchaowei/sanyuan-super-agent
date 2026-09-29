@@ -82,7 +82,7 @@ export async function runInit(): Promise<void> {
     model: {
       provider: "dashscope",
       name: modelName,
-      baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      baseURL: "https://maas.qianwenaiapi.com/compatible-mode/v1",
       apiKey: apiKey || "${DASHSCOPE_API_KEY}",
     },
     plugins: [{ name: "supabase", enabled: false, config: {} }],

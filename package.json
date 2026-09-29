@@ -12,7 +12,8 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "start:init": "tsx src/index.ts init",
-    "continue": "tsx src/index.ts --continue"
+    "continue": "tsx src/index.ts --continue",
+    "trace:inspect": "tsx src/trace/inspect.ts"
   },
   "keywords": [],
   "author": "",
